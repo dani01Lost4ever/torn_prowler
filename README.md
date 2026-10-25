@@ -39,6 +39,15 @@ Va bene qualsiasi hosting Node: Render, Railway, Fly.io o una VPS. Il comando di
 
 Attenzione se il sito è pubblico e le chiamate passano dal proxy: verso FFScouter tutti gli utenti escono con l'IP del server, e FFScouter applica i limiti per IP.
 
+### Coolify
+1. In Coolify: **+ New → Resource → Private Repository (with GitHub App)** oppure **Public Repository**, e scegli `dani01Lost4ever/torn_prowler`, branch `main`.
+2. **Build Pack:** `Dockerfile`, il file è già nella root del repo.
+3. **Ports Exposes:** `3000`.
+4. **Domains:** inserisci il dominio (es. `https://prowler.tuodominio.it`). Coolify crea il certificato HTTPS.
+5. **Deploy.** Il container ha un healthcheck su `/`. Non servono variabili d'ambiente.
+
+Il server deve poter raggiungere `api.torn.com` e `ffscouter.com` in uscita.
+
 ## Test con API simulate
 ```
 node test/mock-upstream.js &
