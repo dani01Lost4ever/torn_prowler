@@ -14,6 +14,11 @@ Sito che, data la tua API key di Torn, trova target attaccabili:
 3. Verifica lo stato reale di ogni candidato su `api.torn.com/user/{id}?selections=profile` e tiene solo quelli attaccabili.
 4. Ricontrolla i primi 30 target ogni minuto e toglie chi non è più attaccabile.
 
+### Key
+- Per Prowler serve una key **Limited**: le tue battle stats, il profilo dei target e la ricerca giocatori.
+- La **custom key** che FFScouter fa creare non basta, perché non ha il permesso `profile` (in una versione) e non è pensata per Prowler. Mettila nel campo **Key FFScouter**: verrà usata solo per FFScouter, mentre per Torn si usa la key Limited.
+- Se la key non ha qualche permesso (codice 16), il sito legge solo quello che può e dice cosa manca. Senza `profile` la ricerca resta disattivata.
+
 ### Stima senza FFScouter
 Se FFScouter non risponde o la key non è registrata, il sito passa da solo alla scheda **Stima senza FFScouter**:
 1. Cerca giocatori con la ricerca di Torn (`v2/user/search`, 25 per chiamata), filtrati per livello (il tuo ± N), non in volo, non in jail e, se non hai impostato "Ospedale entro", non in ospedale. Opzionali: anzianità massima (`daysOld`) e solo senza faction.

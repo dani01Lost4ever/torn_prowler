@@ -25,19 +25,22 @@
   <main>
     <section class="card" id="key-card">
       <h2><span class="step">1</span> La tua API key</h2>
-      <p class="muted">Serve una key <strong>Limited</strong> (per leggere le tue battle stats). La key resta nel tuo browser e non viene salvata da nessuna parte.</p>
+      <p class="muted">Serve una key <strong>Limited</strong> (<a href="https://www.torn.com/preferences.php#tab=api?step=addNewKey&amp;title=Prowler&amp;type=3" target="_blank" rel="noopener">creala qui</a>). Le key restano nel tuo browser e non vengono salvate da nessuna parte.</p>
       <div class="row">
         <input id="api-key" type="password" placeholder="API key di Torn (16 caratteri)" autocomplete="off" spellcheck="false">
         <label class="check"><input id="remember-key" type="checkbox"> Ricorda</label>
         <button id="btn-connect" class="primary">Connetti</button>
       </div>
       <div class="row small">
+        <label title="Se hai creato una custom key apposta per FFScouter, mettila qui e usa sopra una key Limited">Key FFScouter (opzionale, se diversa):
+          <input id="ffs-key" type="password" placeholder="es. la custom key creata per FFScouter" autocomplete="off" spellcheck="false">
+        </label>
         <label>Oppure inserisci il tuo BSS a mano:
           <input id="manual-bss" type="number" min="1" placeholder="es. 120695">
         </label>
       </div>
       <div id="ffs-box" class="notice hidden">
-        <p>Per le stime delle stat dei target uso <a href="https://ffscouter.com" target="_blank" rel="noopener">FFScouter</a>. La tua key non risulta registrata lì.</p>
+        <p>Per le stime delle stat dei target uso <a href="https://ffscouter.com" target="_blank" rel="noopener">FFScouter</a>. La key per FFScouter non risulta registrata lì. Se ne hai già registrata un'altra (es. la custom key di FFScouter), mettila nel campo "Key FFScouter".</p>
         <label class="check"><input id="ffs-consent" type="checkbox"> Ho letto e accetto la <a href="https://ffscouter.com/#data-policy" target="_blank" rel="noopener">data policy di FFScouter</a></label>
         <button id="btn-ffs-register">Registra la key su FFScouter</button>
       </div>
