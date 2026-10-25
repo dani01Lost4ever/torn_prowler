@@ -50,6 +50,7 @@
         <button class="tab active" data-mode="ffs">Ricerca FFScouter</button>
         <button class="tab" data-mode="faction">Da faction</button>
         <button class="tab" data-mode="ids">Lista ID</button>
+        <button class="tab" data-mode="est">Stima senza FFScouter</button>
       </div>
 
       <div class="grid">
@@ -79,6 +80,18 @@
         <label>ID giocatori (separati da virgola, spazio o a capo)
           <textarea id="player-ids" rows="3" placeholder="2548906, 1831932 ..."></textarea>
         </label>
+      </div>
+
+      <div class="mode-panel hidden" data-mode="est">
+        <div class="grid">
+          <label title="Cerco giocatori tra il tuo livello meno N e più N (entro livello min/max)">Livello ± dal tuo <input id="est-lvl-range" type="number" min="0" max="50" value="5"></label>
+          <label title="25 giocatori per pagina, poi 1 chiamata Torn per giocatore">Pagine da cercare <input id="est-pages" type="number" min="1" max="20" value="2"></label>
+          <label title="Da quanti giorni gioca, al massimo (0 = nessun limite)">Anzianità max (giorni) <input id="est-days-max" type="number" min="0" value="0"></label>
+          <label class="check"><input id="est-factionless" type="checkbox"> Solo senza faction</label>
+        </div>
+        <p class="muted small">Trovo giocatori di livello simile al tuo con la ricerca giocatori di Torn (25 per pagina) e per ognuno leggo profilo e personal stats con una sola chiamata. Confronto xanax, energy refill, energy can, LSD, stat enhancer e giorni di gioco con i tuoi: chi ne ha meno di te è probabilmente più debole.</p>
+        <p id="est-me" class="muted small"></p>
+        <div class="notice small">I valori con <strong>~</strong> e l'etichetta <span class="est-tag">stima</span> sono una <strong>stima grezza</strong>, non battle stats reali: non vede gym, perk, educazione né stat comprate. Usala come indicazione, non come certezza.</div>
       </div>
 
       <div class="row">
@@ -121,7 +134,7 @@
   </main>
 
   <footer class="muted small center">
-    Stime stat da FFScouter. FF = 1 + 8/3 × (BSS target / tuo BSS), max 3. Respect ≈ (lv + 197) / 198 × FF.
+    Stime stat da FFScouter o, senza FFScouter, dalle personal stats di Torn (~ = stima). FF = 1 + 8/3 × (BSS target / tuo BSS), max 3. Respect ≈ (lv + 197) / 198 × FF.
   </footer>
 
   <script src="app.js"></script>

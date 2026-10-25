@@ -10,8 +10,21 @@ Sito che, data la tua API key di Torn, trova target attaccabili:
    - **Ricerca FFScouter**: `get-targets` filtrato per FF e livello, fino a 50 per pagina.
    - **Da faction**: una chiamata `faction/{id}?selections=basic` per faction dà lo stato di tutti i membri. Poi le stat si stimano in blocco con `get-stats` di FFScouter.
    - **Lista ID**: ID incollati a mano.
+   - **Stima senza FFScouter**: per quando FFScouter non è disponibile (vedi sotto).
 3. Verifica lo stato reale di ogni candidato su `api.torn.com/user/{id}?selections=profile` e tiene solo quelli attaccabili.
 4. Ricontrolla i primi 30 target ogni minuto e toglie chi non è più attaccabile.
+
+### Stima senza FFScouter
+Se FFScouter non risponde o la key non è registrata, il sito passa da solo alla scheda **Stima senza FFScouter**:
+1. Cerca giocatori con la ricerca di Torn (`v2/user/search`, 25 per chiamata), filtrati per livello (il tuo ± N), non in volo, non in jail e, se non hai impostato "Ospedale entro", non in ospedale. Opzionali: anzianità massima (`daysOld`) e solo senza faction.
+2. Per ogni candidato fa **una** chiamata `user/{id}?selections=profile,personalstats`, che dà sia lo stato attuale sia le personal stats e l'anzianità.
+3. Calcola un'"energia spesa in palestra" stimata, per il target e per te:
+   `(xanax × 250 + energy refill × 150 + energy can × 20 + LSD × 50 + giorni di gioco × 120) × (1 + 1% × stat enhancer)`.
+   I pesi sono in `EST_WEIGHTS` in `public/app.js`.
+4. BSS stimato del target = tuo BSS × √(sua energia / tua energia). Da qui FF e respect come sopra.
+
+In tabella questi valori hanno il prefisso `~` e l'etichetta *stima*; passando il mouse sul BSS si vede il confronto voce per voce. È una stima grezza: non vede gym, perk, educazione né stat comprate.
+Le stesse personal stats si usano anche in "Da faction" e "Lista ID" quando FFScouter manca (in "Da faction" costa una chiamata per membro).
 
 Formule:
 - FF = 1 + 8/3 × (BSS target / tuo BSS), tra 1 e 3.
