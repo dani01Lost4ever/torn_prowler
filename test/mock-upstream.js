@@ -1,6 +1,7 @@
 // Fake api.torn.com + ffscouter.com for local testing:
 //   node test/mock-upstream.js & TORN_BASE=http://localhost:4001 FFS_BASE=http://localhost:4001 node server.js
 // then open http://localhost:3000/?proxy with key AAAAAAAAAAAAAAAA.
+// FFS_DOWN=1 simulates FFScouter down; FLAKY=1 makes some Torn calls fail with code 5 or never answer.
 const http = require('http');
 
 const KEY = 'AAAAAAAAAAAAAAAA';
@@ -40,6 +41,8 @@ http.createServer((req, res) => {
     });
   }
   let m = u.pathname.match(/^\/user\/(\d+)$/);
+  if (m && process.env.FLAKY && tornCalls % 7 === 0) return send(res, 200, { error: { code: 5, error: 'Too many requests' } });
+  if (m && process.env.FLAKY && tornCalls % 11 === 0) return; // never answers
   if (m) {
     const p = players[m[1]];
     if (!p) return send(res, 200, { error: { code: 6, error: 'Incorrect ID' } });
