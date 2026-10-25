@@ -19,6 +19,13 @@ Sito che, data la tua API key di Torn, trova target attaccabili:
 - La **custom key** che FFScouter fa creare non basta, perché non ha il permesso `profile` (in una versione) e non è pensata per Prowler. Mettila nel campo **Key FFScouter**: verrà usata solo per FFScouter, mentre per Torn si usa la key Limited.
 - Se la key non ha qualche permesso (codice 16), il sito legge solo quello che può e dice cosa manca. Senza `profile` la ricerca resta disattivata.
 
+### Key secondaria
+Torn permette 100 chiamate al minuto **per account**, sommando tutte le key di quell'account. Una seconda key dello stesso account quindi non serve, mentre la key Limited di **un altro account** (es. di un amico) aggiunge altre 100 chiamate.
+- Il campo **Key secondaria** è opzionale. Alla connessione il sito controlla con 1 chiamata che la key funzioni, che possa leggere profili e personal stats e che non sia del tuo stesso account.
+- Le chiamate sugli altri giocatori (stato, ricerca, faction) vanno alla key con più spazio libero, quindi si alternano da sole. Ogni key ha il suo limite al minuto.
+- Le chiamate sui tuoi dati (battle stats, personal stats, log attacchi e fair fight) usano sempre e solo la key principale.
+- Se Torn risponde "troppe richieste" su una key, si mette in pausa solo quella per 30 secondi. Se la secondaria smette di funzionare, il sito continua con la principale.
+
 ### Stima senza FFScouter
 Se FFScouter non risponde o la key non è registrata, il sito passa da solo alla scheda **Stima senza FFScouter**:
 1. Cerca giocatori con la ricerca di Torn (`v2/user/search`, 25 per chiamata), filtrati per livello (il tuo ± N), non in volo, non in jail e, se non hai impostato "Ospedale entro", non in ospedale. Opzionali: anzianità massima (`daysOld`) e solo senza faction.
@@ -44,7 +51,7 @@ Dopo un attacco partito dal pulsante **Attacca**, quando torni sulla scheda di P
 - Scheda **Dal database**: i giocatori già attaccati con un BSS noto. Il filtro FF gira senza chiamate e poi si controlla lo stato solo di chi è nel range. Anche "Da faction" senza FFScouter salta la chiamata per i membri già noti.
 
 **Rate limit:**
-- **Torn:** il limite di Torn è di 100 chiamate al minuto **per account, sommando tutte le key** (docs ufficiali, "Automatic limits"), quindi una seconda key dello stesso giocatore non aiuta. Il sito non supera mai le 60 chiamate al minuto per utente. Il limite si può abbassare, non alzare. Il contatore è nel browser di ciascuno, quindi ogni utente ha il suo. Se Torn risponde con errore 5 (troppe richieste), aspetta 30 secondi e riprova.
+- **Torn:** il limite di Torn è di 100 chiamate al minuto **per account, sommando tutte le key** (docs ufficiali, "Automatic limits"), quindi una seconda key dello stesso giocatore non aiuta. Il sito non supera mai le 100 chiamate al minuto per key (campo "Limite chiamate/min per key"). Il limite si può abbassare, non alzare. Contano anche gli script e gli altri siti che usano lo stesso account: se li usi insieme a Prowler, abbassalo. Il contatore è nel browser di ciascuno, quindi ogni utente ha il suo. Se Torn risponde con errore 5 (troppe richieste), aspetta 30 secondi e riprova.
 - **FFScouter:** il sito rispetta i limiti di ogni endpoint (get-targets 25 al minuto, get-stats 120 al minuto).
 
 ## Avvio locale
