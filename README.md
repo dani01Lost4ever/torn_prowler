@@ -47,6 +47,7 @@ Dopo un attacco partito dal pulsante **Attacca**, quando torni sulla scheda di P
 - La lettura passa da `server.js` (`POST /api/sync`): il server usa la tua key solo per quella richiesta (2 chiamate Torn: battle stats + attacchi, contate nel limite del browser) e **non la salva**.
 - Dalla FF reale ricava il BSS vero del target: BSS target = (FF − 1) × 3/8 × tuo BSS. Con FF 3 è solo un minimo (≥). Le tue battle stats non vengono salvate.
 - Il database (SQLite integrato in Node, file `data/prowler.db`, o `DB_PATH`) tiene: i tuoi attacchi (visibili solo a te, dopo la sync con la tua key) e, per ogni giocatore attaccato, nome, livello, faction e BSS ricavato. I BSS sono condivisi tra gli utenti di Prowler.
+- La pagina **Attacchi fatti** (in alto, `#attacchi`) elenca le persone che hai attaccato: ultimo attacco, FF reale, respect e BSS ricavato. Con "Aggiorna stato" (per riga o per tutti, 1 chiamata a persona) vedi chi è di nuovo attaccabile; "Solo riattaccabili ora" filtra la lista.
 - In tabella il BSS da attacco (ultimi 30 giorni) ha l'etichetta **reale** e vince su FFScouter e sulla stima. Sotto la FF compare "reale X" se hai già attaccato quel giocatore.
 - Scheda **Dal database**: i giocatori già attaccati con un BSS noto. Il filtro FF gira senza chiamate e poi si controlla lo stato solo di chi è nel range. Anche "Da faction" senza FFScouter salta la chiamata per i membri già noti.
 
