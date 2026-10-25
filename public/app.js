@@ -623,7 +623,7 @@ function rowHtml(t) {
     <td class="${cls}">${stText}${st.description && st.state !== 'Okay' ? `<span class="sub">${esc(st.description)}</span>` : ''}</td>
     <td>${esc(la.relative || '?')}<span class="sub">${esc(la.status || '')}</span></td>
     <td><div class="actions">
-      <a class="attack" href="https://www.torn.com/loader.php?sid=attack&user2ID=${esc(t.id)}" target="_blank" rel="noopener">Attacca</a>
+      <a class="attack" href="https://www.torn.com/page.php?sid=attack&user2ID=${esc(t.id)}" target="_blank" rel="noopener">Attacca</a>
       <button data-act="recheck" title="Ricontrolla stato">↻</button>
       <button data-act="ignore" title="Nascondi questo giocatore">✕</button>
     </div></td>
