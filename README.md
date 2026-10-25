@@ -28,7 +28,7 @@ Torn permette 100 chiamate al minuto **per account**, sommando tutte le key di q
 
 ### Stima senza FFScouter
 Se FFScouter non risponde o la key non è registrata, il sito passa da solo alla scheda **Stima senza FFScouter**:
-1. Cerca giocatori con la ricerca di Torn (`v2/user/search`, 25 per chiamata), filtrati per livello (il tuo ± N), non in volo, non in jail e, se non hai impostato "Ospedale entro", non in ospedale. Opzionali: anzianità massima (`daysOld`) e solo senza faction.
+1. Cerca giocatori con la ricerca di Torn (`v2/user/search`, 25 per chiamata), filtrati per livello (livello min/max e, se lo imposti, il tuo ± N), non in volo, non in jail e, se non hai impostato "Ospedale entro", non in ospedale. Opzionali: anzianità massima (`daysOld`) e solo senza faction.
 2. Per ogni candidato fa **una** chiamata `user/{id}?selections=profile,personalstats`, che dà sia lo stato attuale sia le personal stats e l'anzianità.
 3. Calcola un'"energia spesa in palestra" stimata, per il target e per te:
    `(xanax × 250 + energy refill × 150 + energy can × 20 + LSD × 50 + giorni di gioco × 120) × (1 + 1% × stat enhancer)`.
@@ -47,6 +47,7 @@ Dopo un attacco partito dal pulsante **Attacca**, quando torni sulla scheda di P
 - La lettura passa da `server.js` (`POST /api/sync`): il server usa la tua key solo per quella richiesta (2 chiamate Torn: battle stats + attacchi, contate nel limite del browser) e **non la salva**.
 - Dalla FF reale ricava il BSS vero del target: BSS target = (FF − 1) × 3/8 × tuo BSS. Con FF 3 è solo un minimo (≥). Le tue battle stats non vengono salvate.
 - Il database (SQLite integrato in Node, file `data/prowler.db`, o `DB_PATH`) tiene: i tuoi attacchi (visibili solo a te, dopo la sync con la tua key) e, per ogni giocatore attaccato, nome, livello, faction e BSS ricavato. I BSS sono condivisi tra gli utenti di Prowler.
+- La pagina **Attacchi fatti** (in alto, `#attacchi`) elenca le persone che hai attaccato: ultimo attacco, FF reale, respect e BSS ricavato. Con "Aggiorna stato" (per riga o per tutti, 1 chiamata a persona) vedi chi è di nuovo attaccabile; "Solo riattaccabili ora" filtra la lista.
 - In tabella il BSS da attacco (ultimi 30 giorni) ha l'etichetta **reale** e vince su FFScouter e sulla stima. Sotto la FF compare "reale X" se hai già attaccato quel giocatore.
 - Scheda **Dal database**: i giocatori già attaccati con un BSS noto. Il filtro FF gira senza chiamate e poi si controlla lo stato solo di chi è nel range. Anche "Da faction" senza FFScouter salta la chiamata per i membri già noti.
 

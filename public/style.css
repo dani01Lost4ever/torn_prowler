@@ -74,6 +74,18 @@ a:hover { text-decoration: underline; }
 }
 .rate #rate-used { color: var(--text); font-weight: 700; }
 
+.nav { display: flex; gap: 2px; padding: 3px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg-2); }
+.nav a {
+  display: inline-flex; align-items: center; gap: 6px; padding: 5px 12px; border-radius: 7px;
+  color: var(--muted); font-weight: 600; font-size: 13px; text-decoration: none;
+}
+.nav a:hover { color: var(--text); text-decoration: none; }
+.nav a.active { background: var(--card-2); color: var(--text); box-shadow: 0 0 0 1px var(--border-2) inset; }
+.badge {
+  min-width: 18px; padding: 0 6px; border-radius: 999px; background: var(--accent-soft); color: var(--accent);
+  font-size: 11px; font-weight: 800; line-height: 18px; text-align: center; font-variant-numeric: tabular-nums;
+}
+
 /* ---------- layout ---------- */
 main {
   max-width: 1560px; margin: 0 auto; padding: 20px;
@@ -84,7 +96,8 @@ main {
   #key-card { grid-column: 1; grid-row: 1; }
   #search-card { grid-column: 1; grid-row: 2; }
   #results-card { grid-column: 2; grid-row: 1 / span 2; min-height: 100%; }
-  main > .card:not(#key-card):not(#search-card):not(#results-card) { grid-column: 1; }
+  #view-search > .card:not(#key-card):not(#search-card):not(#results-card) { grid-column: 1; }
+  #view-attacks { grid-template-columns: minmax(0, 1fr); }
   #search-card .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   #search-card .grid label.check { grid-column: 1 / -1; }
 }
@@ -195,10 +208,6 @@ td:nth-child(4) { font-weight: 700; }
   padding: 0 5px; border: 1px solid rgba(245, 165, 36, .45); border-radius: 5px; color: var(--orange); background: var(--orange-soft); vertical-align: 1px;
 }
 .est-tag.real-tag { border-color: rgba(60, 207, 122, .45); color: var(--green); background: var(--green-soft); }
-.attacks { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 4px; }
-.attacks li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; padding: 6px 0; border-bottom: 1px solid var(--border); font-size: 13.5px; }
-.attacks li:last-child { border-bottom: 0; }
-.attacks li strong { margin-left: auto; }
 .pos { color: var(--green); }
 .neg { color: var(--red); }
 
@@ -211,6 +220,7 @@ td.st-okay::before, td.st-hospital::before, td.st-other::before {
 .st-okay { color: var(--green); }
 .st-hospital { color: var(--red); }
 .st-other { color: var(--orange); }
+td.st-unknown { color: var(--faint); font-size: 13px; }
 td.st-okay .sub, td.st-hospital .sub, td.st-other .sub { font-weight: 400; padding-left: 15px; }
 tr.stale td { opacity: .45; }
 
@@ -228,7 +238,8 @@ tr.stale td { opacity: .45; }
 }
 .actions a.attack:hover { background: linear-gradient(180deg, #ff6b6f, #f0585d); text-decoration: none; }
 
-#empty { padding: 48px 16px; margin: 0; }
+#empty, #attacks-empty { padding: 48px 16px; margin: 0; }
+#attacks-table th { cursor: default; }
 
 footer { padding: 8px 20px 28px; color: var(--faint); }
 
@@ -272,4 +283,23 @@ footer { padding: 8px 20px 28px; color: var(--faint); }
   #results .actions { justify-content: stretch; }
   #results .actions a.attack { flex: 1; padding: 9px 14px; font-size: 14px; }
   #results .actions button { padding: 9px 14px; }
+
+  .nav { order: 2; }
+  /* attacks page: cards labelled from data-label */
+  #attacks-table thead { display: none; }
+  #attacks-table, #attacks-table tbody { display: block; }
+  #attacks-table tbody tr {
+    display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px 10px;
+    padding: 12px; margin-bottom: 10px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg-2);
+  }
+  #attacks-table td { padding: 0; border: 0; text-align: left; white-space: normal; min-width: 0; }
+  #attacks-table td.name { grid-column: 1 / -1; font-size: 15px; }
+  #attacks-table td[data-label]::before {
+    content: attr(data-label); display: block; font-size: 10px; font-weight: 700; letter-spacing: .5px; text-transform: uppercase; color: var(--faint);
+  }
+  #attacks-table td:nth-child(6) { grid-column: 2 / -1; padding-top: 17px; }
+  #attacks-table td:last-child { grid-column: 1 / -1; padding-top: 4px; }
+  #attacks-table .actions { justify-content: stretch; }
+  #attacks-table .actions a.attack { flex: 1; padding: 9px 14px; font-size: 14px; }
+  #attacks-table .actions button { padding: 9px 14px; }
 }

@@ -55,6 +55,7 @@ const state = {
   sort: { key: 'respect', dir: -1 },
   ignored: new Set(store.get('ttf_ignored', [])),
   myAttacks: new Map(), // defender id -> my latest attack on him, from the Prowler database
+  attacked: new Map(), // defender id -> row of the "Attacchi fatti" page (latest attack + live status)
   attacksTotal: 0,
   pendingAttack: false, // clicked "Attacca": sync when the user comes back to this tab
 };
@@ -223,7 +224,7 @@ function progress(done, total) {
   $('progress-bar').style.width = total ? `${Math.round((done / total) * 100)}%` : '0';
 }
 
-const SETTINGS = ['ff-min', 'ff-max', 'lvl-min', 'lvl-max', 'bss-max', 'hosp-within', 'ffs-rounds', 'ffs-inactive', 'ffs-factionless', 'faction-ids', 'auto-refresh', 'rate-limit-key', 'manual-bss', 'est-lvl-range', 'est-pages', 'est-days-max', 'est-factionless', 'db-days', 'db-mine'];
+const SETTINGS = ['ff-min', 'ff-max', 'lvl-min', 'lvl-max', 'bss-max', 'hosp-within', 'ffs-rounds', 'ffs-inactive', 'ffs-factionless', 'faction-ids', 'auto-refresh', 'rate-limit-key', 'manual-bss', 'est-lvl-range', 'est-pages', 'est-days-max', 'est-factionless', 'db-days', 'db-mine', 'attacks-only-ok'];
 function saveSettings() {
   const s = {};
   for (const id of SETTINGS) { const el = $(id); s[id] = el.type === 'checkbox' ? el.checked : el.value; }
@@ -346,6 +347,7 @@ async function syncAttacks(manual = false) {
     if (d.calls > 2) tornLimiter.record(d.calls - 2);
     state.myAttacks = new Map();
     for (const a of d.attacks) if (!state.myAttacks.has(String(a.defender_id))) state.myAttacks.set(String(a.defender_id), a);
+    await buildAttacked(d.attacks);
     state.attacksTotal = d.total;
     // Torn can take a moment to log the fight: if it isn't there yet, try a couple more times.
     if (d.added) { state.pendingAttack = false; pendingTries = 0; }
@@ -363,14 +365,111 @@ async function syncAttacks(manual = false) {
 }
 
 const ago = (ts) => { const s = nowSec() - ts; return s < 3600 ? `${Math.max(1, Math.round(s / 60))} min fa` : s < 86400 ? `${Math.round(s / 3600)} h fa` : `${Math.round(s / 86400)} gg fa`; };
+// ---------- "Attacchi fatti" page ----------
+// One row per person (latest attack first in d.attacks); a status already read is kept.
+async function buildAttacked(attacks) {
+  const next = new Map();
+  for (const a of attacks) {
+    const id = String(a.defender_id);
+    const row = next.get(id);
+    if (row) { row.count++; continue; }
+    const old = { ...state.attacked.get(id) };
+    // Attacked after the last check: that status is stale (probably in hospital now).
+    if (old.checkedAt && a.ended * 1000 > old.checkedAt) { old.status = null; old.checkedAt = 0; }
+    next.set(id, { ...old, id, name: a.name || old.name, level: a.level || old.level, ended: a.ended, result: a.result, respect: a.respect, fairFight: a.fair_fight, count: 1 });
+  }
+  state.attacked = next;
+  await enrichFromDb([...next.values()]);
+}
+
+// Okay first, then hospital by time left, then unknown, then the rest; latest attack first within each.
+function attackedRank(t) {
+  const st = t.status;
+  if (!st) return 2e10;
+  if (st.state === 'Okay') return 0;
+  if (st.state === 'Hospital') return 1e10 + (st.until || 0);
+  return 3e10;
+}
 function renderAttacks() {
-  $('attacks-card').classList.remove('hidden');
-  const rows = [...state.myAttacks.values()].slice(0, 15);
-  $('attacks-list').innerHTML = rows.length ? rows.map((a) => `<li>
-    <a href="https://www.torn.com/profiles.php?XID=${esc(a.defender_id)}" target="_blank" rel="noopener">${esc(a.name || a.defender_id)}</a>
-    <span class="muted">${a.level ? `Lv ${esc(a.level)} · ` : ''}${esc(a.result)} · ${ago(a.ended)}</span>
-    <strong>FF ${a.fair_fight != null ? a.fair_fight.toFixed(2) : '?'}</strong>${a.respect ? ` <span class="muted">${a.respect.toFixed(2)} resp</span>` : ''}
-  </li>`).join('') : '<li class="muted">Nessun attacco ancora: attacca un target con il pulsante "Attacca" e torna qui.</li>';
+  const all = [...state.attacked.values()].sort((a, b) => attackedRank(a) - attackedRank(b) || b.ended - a.ended);
+  const onlyOk = $('attacks-only-ok').checked;
+  const list = onlyOk ? all.filter((t) => statusPasses(t.status, 0)) : all;
+  const okNow = all.filter((t) => statusPasses(t.status, 0)).length;
+  $('attacks-count').textContent = all.length ? `(${all.length} persone, ${state.attacksTotal} attacchi${all.some((t) => t.status) ? `, ${okNow} riattaccabili` : ''})` : '';
+  $('nav-attacks-count').textContent = all.length;
+  $('nav-attacks-count').classList.toggle('hidden', !all.length);
+  $('btn-attacks-status').disabled = !all.length || !state.key;
+  $('attacks-empty').textContent = !state.me ? 'Connetti la key nella pagina Cerca: qui compariranno le persone che hai attaccato.'
+    : !all.length ? 'Nessun attacco ancora: attacca un target con il pulsante "Attacca" e torna qui.'
+    : 'Nessuno è riattaccabile adesso. Togli il filtro o aggiorna lo stato.';
+  $('attacks-empty').classList.toggle('hidden', list.length > 0);
+  document.querySelector('#attacks-table tbody').innerHTML = list.map(attackedRowHtml).join('');
+}
+function attackedRowHtml(t) {
+  const st = t.status;
+  const cls = !st ? 'st-unknown' : st.state === 'Okay' ? 'st-okay' : st.state === 'Hospital' ? 'st-hospital' : 'st-other';
+  const stText = !st ? 'Da controllare' : st.state === 'Okay' ? 'Riattaccabile' : st.state === 'Hospital' ? `In ospedale (${countdown(st.until)})` : esc(st.state);
+  const la = t.lastAction || {};
+  const bssAge = t.bssDbAt ? `ricavato ${ago(t.bssDbAt)}` : '';
+  return `<tr data-id="${esc(t.id)}">
+    <td class="name"><a href="https://www.torn.com/profiles.php?XID=${esc(t.id)}" target="_blank" rel="noopener">${esc(t.name || '?')}</a> <span class="muted">[${esc(t.id)}]</span>${t.faction ? `<span class="sub">${esc(t.faction)}</span>` : ''}</td>
+    <td data-label="Lv">${esc(t.level ?? '?')}</td>
+    <td data-label="Ultimo attacco">${esc(t.result || '?')}<span class="sub">${ago(t.ended)}${t.count > 1 ? ` · ${t.count} attacchi` : ''}</span></td>
+    <td data-label="FF reale">${t.fairFight != null ? t.fairFight.toFixed(2) : '?'}${t.respect ? `<span class="sub">${t.respect.toFixed(2)} respect</span>` : ''}</td>
+    <td data-label="BSS">${t.bssDb ? (t.bssDbMin ? '≥' : '') + fmt(t.bssDb) : '?'}<span class="sub">${esc(bssAge)}</span></td>
+    <td class="${cls}">${stText}${st && st.description && st.state !== 'Okay' ? `<span class="sub">${esc(st.description)}</span>` : ''}</td>
+    <td data-label="Ultima azione">${esc(la.relative || '?')}<span class="sub">${esc(la.status || '')}</span></td>
+    <td><div class="actions">
+      <a class="attack" href="https://www.torn.com/page.php?sid=attack&user2ID=${esc(t.id)}" target="_blank" rel="noopener">Attacca</a>
+      <button data-act="status" title="Aggiorna stato">↻</button>
+    </div></td>
+  </tr>`;
+}
+let attacksQueued = false;
+function scheduleAttacksRender() {
+  if (attacksQueued) return;
+  attacksQueued = true;
+  requestAnimationFrame(() => { attacksQueued = false; renderAttacks(); });
+}
+
+let checkingAttacked = false;
+async function refreshAttackedStatus(list) {
+  if (checkingAttacked || !state.key) return;
+  checkingAttacked = true;
+  $('btn-attacks-status').disabled = true;
+  let done = 0, failed = 0;
+  const bar = (n, tot) => { $('attacks-progress').classList.toggle('hidden', !tot); $('attacks-progress-bar').style.width = tot ? `${Math.round((n / tot) * 100)}%` : '0'; };
+  bar(0, list.length);
+  try {
+    let i = 0;
+    const next = async () => {
+      while (i < list.length) {
+        const t = list[i++];
+        try { applyProfile(t, await fetchProfile(t.id)); } catch (e) { failed++; if (e.fatal) { i = list.length; throw e; } }
+        bar(++done, list.length);
+        setMsg('attacks-msg', `Controllati ${done}/${list.length}…`);
+        scheduleAttacksRender();
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(list.length, 4 * activeKeys().length) }, next));
+    const ok = list.filter((t) => statusPasses(t.status, 0)).length;
+    setMsg('attacks-msg', `Stato aggiornato: ${ok} su ${list.length} riattaccabili ora${failed ? `, ${failed} non letti` : ''}.`, 'ok');
+  } catch (e) {
+    setMsg('attacks-msg', e.message, 'error');
+  } finally {
+    checkingAttacked = false;
+    bar(0, 0);
+    renderAttacks();
+  }
+}
+
+// Two pages in one: #attacchi shows the attacks, anything else the search.
+function showView() {
+  const view = location.hash === '#attacchi' ? 'attacks' : 'search';
+  $('view-search').classList.toggle('hidden', view !== 'search');
+  $('view-attacks').classList.toggle('hidden', view !== 'attacks');
+  document.querySelectorAll('.nav a').forEach((a) => a.classList.toggle('active', a.dataset.view === view));
+  if (view === 'attacks') renderAttacks();
 }
 
 // ---------- connect ----------
@@ -636,7 +735,9 @@ async function searchEst(f) {
   const me = state.me;
   if (!me.bss) throw new Error('Serve il tuo BSS (key Limited o inserito a mano) per confrontarti.');
   if (!me.training || !me.training.energy) throw new Error('Non riesco a leggere le tue personal stats, servono per il confronto.');
-  const range = Math.max(0, num('est-lvl-range'));
+  // "Livello ± dal tuo" is optional: empty means only Livello min/max apply.
+  const rangeTxt = $('est-lvl-range').value.trim();
+  const range = rangeTxt === '' ? Infinity : Math.max(0, Number(rangeTxt) || 0);
   const lo = Math.max(f.lvlMin, me.level - range), hi = Math.min(f.lvlMax, me.level + range);
   if (lo > hi) throw new Error(`Nessun livello tra ${lo} e ${hi}: controlla livello min/max.`);
   const flt = [`level:>=:${lo}`, `level:<=:${hi}`, 'notTraveling', 'notInJail', 'notInFederalJail'];
@@ -820,6 +921,16 @@ function init() {
   $('btn-stop').onclick = () => { state.abort = true; };
   $('btn-recheck').onclick = () => recheck();
   $('btn-sync').onclick = () => syncAttacks(true);
+  $('btn-attacks-status').onclick = () => refreshAttackedStatus([...state.attacked.values()]);
+  $('attacks-only-ok').onchange = () => { saveSettings(); renderAttacks(); };
+  document.querySelector('#attacks-table tbody').addEventListener('click', (e) => {
+    if (e.target.closest('a.attack')) { state.pendingAttack = true; pendingTries = 0; return; }
+    const btn = e.target.closest('button[data-act="status"]');
+    const t = btn && state.attacked.get(btn.closest('tr').dataset.id);
+    if (t) { btn.disabled = true; refreshAttackedStatus([t]); }
+  });
+  window.addEventListener('hashchange', showView);
+  showView();
   // After "Attacca" the fight happens in a Torn tab: read the attack (and its FF) once we're back.
   document.querySelector('#results tbody').addEventListener('click', (e) => { if (e.target.closest('a.attack')) { state.pendingAttack = true; pendingTries = 0; } });
   const backFromAttack = () => { if (state.pendingAttack && document.visibilityState === 'visible') setTimeout(() => syncAttacks(), 3000); };
@@ -881,6 +992,7 @@ function init() {
     $('rate-used').textContent = keys.reduce((a, k) => a + k.limiter.used(), 0) + (pause > 0 ? ` (pausa ${pause}s)` : '');
     $('rate-max').textContent = keys.reduce((a, k) => a + k.limiter.max, 0);
     if ([...state.targets.values()].some((t) => t.status && t.status.state === 'Hospital')) scheduleRender();
+    if (!$('view-attacks').classList.contains('hidden') && [...state.attacked.values()].some((t) => t.status && t.status.state === 'Hospital')) scheduleAttacksRender();
   }, 1000);
   // Auto re-check the top 30 targets every minute.
   setInterval(() => {

@@ -17,12 +17,16 @@
       <span>BSS <strong id="me-bss"></strong></span>
       <span class="muted">Total <span id="me-total"></span></span>
     </div>
+    <nav class="nav">
+      <a href="#" data-view="search" class="active">Cerca</a>
+      <a href="#attacchi" data-view="attacks">Attacchi fatti <span id="nav-attacks-count" class="badge hidden"></span></a>
+    </nav>
     <div class="rate" title="Chiamate alle API Torn nell'ultimo minuto">
       API <span id="rate-used">0</span>/<span id="rate-max">100</span> al min
     </div>
   </header>
 
-  <main>
+  <main id="view-search">
     <section class="card" id="key-card">
       <h2><span class="step">1</span> La tua API key</h2>
       <p class="muted">Serve una key <strong>Limited</strong> (<a href="https://www.torn.com/preferences.php#tab=api?step=addNewKey&amp;title=Prowler&amp;type=3" target="_blank" rel="noopener">creala qui</a>). Le key restano nel tuo browser e non vengono salvate da nessuna parte.</p>
@@ -91,7 +95,7 @@
 
       <div class="mode-panel hidden" data-mode="est">
         <div class="grid">
-          <label title="Cerco giocatori tra il tuo livello meno N e più N (entro livello min/max)">Livello ± dal tuo <input id="est-lvl-range" type="number" min="0" max="50" value="5"></label>
+          <label title="Facoltativo: cerco giocatori tra il tuo livello meno N e più N (entro livello min/max). Vuoto = solo livello min/max">Livello ± dal tuo (facoltativo) <input id="est-lvl-range" type="number" min="0" max="99" placeholder="nessun limite"></label>
           <label title="25 giocatori per pagina, poi 1 chiamata Torn per giocatore">Pagine da cercare <input id="est-pages" type="number" min="1" max="20" value="2"></label>
           <label title="Da quanti giorni gioca, al massimo (0 = nessun limite)">Anzianità max (giorni) <input id="est-days-max" type="number" min="0" value="0"></label>
           <label class="check"><input id="est-factionless" type="checkbox"> Solo senza faction</label>
@@ -119,16 +123,6 @@
       <div id="search-msg" class="msg"></div>
     </section>
 
-    <section class="card hidden" id="attacks-card">
-      <div class="row between">
-        <h2>I tuoi attacchi</h2>
-        <button id="btn-sync">Aggiorna attacchi</button>
-      </div>
-      <p class="muted small">Dopo un attacco partito da "Attacca" leggo il log di Torn e salvo la fair fight reale. Da lì ricavo il BSS vero del target, che finisce nel database (senza la tua key né le tue stat).</p>
-      <ul id="attacks-list" class="attacks"></ul>
-      <div id="attacks-msg" class="msg"></div>
-    </section>
-
     <section class="card" id="results-card">
       <div class="row between">
         <h2>Target <span id="count" class="muted"></span></h2>
@@ -154,6 +148,40 @@
           <tbody></tbody>
         </table>
         <p id="empty" class="muted center">Nessun target ancora. Connetti la key e premi Cerca.</p>
+      </div>
+    </section>
+  </main>
+
+  <main id="view-attacks" class="hidden">
+    <section class="card" id="attacks-card">
+      <div class="row between">
+        <h2>Attacchi fatti <span id="attacks-count" class="muted"></span></h2>
+        <div class="row">
+          <label class="check"><input id="attacks-only-ok" type="checkbox"> Solo riattaccabili ora</label>
+          <button id="btn-sync">Aggiorna attacchi</button>
+          <button id="btn-attacks-status" class="primary" disabled>Aggiorna stato di tutti</button>
+        </div>
+      </div>
+      <p class="muted small">Le persone che hai attaccato, con l'ultimo attacco e la fair fight reale letta dal log di Torn. "Aggiorna stato" controlla su Torn chi è di nuovo attaccabile (1 chiamata a persona, si alternano tra le key).</p>
+      <div class="progress hidden" id="attacks-progress"><div id="attacks-progress-bar"></div></div>
+      <div id="attacks-msg" class="msg"></div>
+      <div class="table-wrap">
+        <table id="attacks-table" class="cards">
+          <thead>
+            <tr>
+              <th>Giocatore</th>
+              <th>Lv</th>
+              <th>Ultimo attacco</th>
+              <th>FF reale</th>
+              <th>BSS</th>
+              <th>Stato</th>
+              <th>Ultima azione</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+        <p id="attacks-empty" class="muted center">Connetti la key nella pagina Cerca: qui compariranno le persone che hai attaccato.</p>
       </div>
     </section>
   </main>
