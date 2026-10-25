@@ -54,6 +54,7 @@
         <button class="tab" data-mode="faction">Da faction</button>
         <button class="tab" data-mode="ids">Lista ID</button>
         <button class="tab" data-mode="est">Stima senza FFScouter</button>
+        <button class="tab" data-mode="db">Dal database</button>
       </div>
 
       <div class="grid">
@@ -97,6 +98,14 @@
         <div class="notice small">I valori con <strong>~</strong> e l'etichetta <span class="est-tag">stima</span> sono una <strong>stima grezza</strong>, non battle stats reali: non vede gym, perk, educazione né stat comprate. Usala come indicazione, non come certezza.</div>
       </div>
 
+      <div class="mode-panel hidden" data-mode="db">
+        <div class="grid">
+          <label title="Usa solo i giocatori con una fair fight letta negli ultimi N giorni">Dati degli ultimi (giorni) <input id="db-days" type="number" min="1" max="60" value="30"></label>
+          <label class="check"><input id="db-mine" type="checkbox"> Solo quelli che ho attaccato io</label>
+        </div>
+        <p class="muted small">Giocatori già attaccati con Prowler (da te o da altri utenti). Il loro BSS è ricavato dalla fair fight reale dell'attacco, quindi il filtro FF non costa chiamate: controllo su Torn solo lo stato di chi è nel tuo range.</p>
+      </div>
+
       <div class="row">
         <button id="btn-search" class="primary" disabled>Cerca</button>
         <button id="btn-stop" disabled>Stop</button>
@@ -105,6 +114,16 @@
       </div>
       <div class="progress hidden" id="progress"><div id="progress-bar"></div></div>
       <div id="search-msg" class="msg"></div>
+    </section>
+
+    <section class="card hidden" id="attacks-card">
+      <div class="row between">
+        <h2>I tuoi attacchi</h2>
+        <button id="btn-sync">Aggiorna attacchi</button>
+      </div>
+      <p class="muted small">Dopo un attacco partito da "Attacca" leggo il log di Torn e salvo la fair fight reale. Da lì ricavo il BSS vero del target, che finisce nel database (senza la tua key né le tue stat).</p>
+      <ul id="attacks-list" class="attacks"></ul>
+      <div id="attacks-msg" class="msg"></div>
     </section>
 
     <section class="card" id="results-card">
@@ -137,7 +156,7 @@
   </main>
 
   <footer class="muted small center">
-    Stime stat da FFScouter o, senza FFScouter, dalle personal stats di Torn (~ = stima). FF = 1 + 8/3 × (BSS target / tuo BSS), max 3. Respect ≈ (lv + 197) / 198 × FF.
+    Stime stat dalla fair fight reale degli attacchi fatti con Prowler, da FFScouter o, senza FFScouter, dalle personal stats di Torn (~ = stima). FF = 1 + 8/3 × (BSS target / tuo BSS), max 3. Respect ≈ (lv + 197) / 198 × FF.
   </footer>
 
   <script src="app.js"></script>

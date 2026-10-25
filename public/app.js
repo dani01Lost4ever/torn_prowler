@@ -54,6 +54,9 @@ const state = {
   targets: new Map(),
   sort: { key: 'respect', dir: -1 },
   ignored: new Set(store.get('ttf_ignored', [])),
+  myAttacks: new Map(), // defender id -> my latest attack on him, from the Prowler database
+  attacksTotal: 0,
+  pendingAttack: false, // clicked "Attacca": sync when the user comes back to this tab
 };
 
 // ---------- transport (direct first, falls back to our proxy on CORS/network failure) ----------
@@ -100,6 +103,8 @@ class Limiter {
   used() { const t = Date.now(); this.stamps = this.stamps.filter((s) => t - s < 60000); return this.stamps.length; }
   // Stop every caller, not just the one that got the error, so they don't all hit the limit again.
   pause(ms) { this.pausedUntil = Math.max(this.pausedUntil, Date.now() + ms); }
+  // Count calls someone else made with our key (the server, during a sync).
+  record(n) { for (let i = 0; i < n; i++) this.stamps.push(Date.now()); }
   take() {
     const p = this.chain.then(async () => {
       for (;;) {
@@ -191,7 +196,7 @@ function progress(done, total) {
   $('progress-bar').style.width = total ? `${Math.round((done / total) * 100)}%` : '0';
 }
 
-const SETTINGS = ['ff-min', 'ff-max', 'lvl-min', 'lvl-max', 'bss-max', 'hosp-within', 'ffs-rounds', 'ffs-inactive', 'ffs-factionless', 'faction-ids', 'auto-refresh', 'rate-limit', 'manual-bss', 'est-lvl-range', 'est-pages', 'est-days-max', 'est-factionless'];
+const SETTINGS = ['ff-min', 'ff-max', 'lvl-min', 'lvl-max', 'bss-max', 'hosp-within', 'ffs-rounds', 'ffs-inactive', 'ffs-factionless', 'faction-ids', 'auto-refresh', 'rate-limit', 'manual-bss', 'est-lvl-range', 'est-pages', 'est-days-max', 'est-factionless', 'db-days', 'db-mine'];
 function saveSettings() {
   const s = {};
   for (const id of SETTINGS) { const el = $(id); s[id] = el.type === 'checkbox' ? el.checked : el.value; }
@@ -218,10 +223,11 @@ function statusPasses(st, hospWithin) {
 // Fill FF / respect / bss% on a target from whatever estimate we have.
 function score(t) {
   const myBss = state.me && state.me.bss;
-  // FFScouter wins when we have it; otherwise fall back to the personal stats estimate.
-  if (!t.bssPublic) estimateFromTraining(t);
-  t.estimated = !t.bssPublic && !!t.bssEst;
-  const bss = t.bssPublic || t.bssEst;
+  // A real fair fight from the last 30 days wins, then FFScouter, then the personal stats estimate.
+  t.fromAttack = !!(t.bssDb && t.bssDbAt > nowSec() - 30 * 86400);
+  if (!t.bssPublic && !t.fromAttack) estimateFromTraining(t);
+  t.estimated = !t.fromAttack && !t.bssPublic && !!t.bssEst;
+  const bss = t.fromAttack ? t.bssDb : t.bssPublic || t.bssEst;
   if (bss && myBss) {
     t.ff = fairFight(bss, myBss);
     t.bssPct = (bss / myBss) * 100;
@@ -257,12 +263,87 @@ function applyProfile(t, p) {
 async function fetchProfile(id, withStats = false) {
   return torn(`/user/${id}`, { selections: withStats ? 'profile,personalstats' : 'profile' });
 }
-const needsEstimate = (t) => !t.bssPublic && t.ffsFF == null;
+const needsEstimate = (t) => !t.bssPublic && t.ffsFF == null && !t.bssDb;
 
 function upsert(t) {
   if (state.ignored.has(String(t.id))) return;
   state.targets.set(String(t.id), t);
   scheduleRender();
+}
+
+// ---------- Prowler database (server.js /api) ----------
+// Attacks made through Prowler are saved on the server with their real fair fight, which gives
+// the target's real BSS (FF = 1 + 8/3 × target/attacker). Keys are sent only to read the attacks.
+const dbAvailable = canProxy;
+async function dbGet(path) {
+  if (!dbAvailable) return null;
+  try { const r = await timedFetch(path); return r.ok ? await r.json() : null; } catch { return null; }
+}
+function applyDb(t, p) {
+  if (!p) return t;
+  t.name = t.name || p.name;
+  t.level = t.level || p.level;
+  if (p.bss) { t.bssDb = p.bss; t.bssDbMin = p.bss_kind === 'min'; t.bssDbAt = p.bss_at; }
+  return t;
+}
+// Fill what the database knows about these targets: no Torn calls.
+async function enrichFromDb(cands) {
+  for (let i = 0; i < cands.length; i += 200) {
+    const batch = cands.slice(i, i + 200);
+    const d = await dbGet('/api/players?ids=' + batch.map((t) => t.id).join(','));
+    if (!d) return;
+    const byId = new Map(d.players.map((p) => [String(p.id), p]));
+    for (const t of batch) applyDb(t, byId.get(String(t.id)));
+  }
+}
+
+let syncing = false, lastSyncAt = 0, pendingTries = 0;
+async function syncAttacks(manual = false) {
+  if (!dbAvailable || !state.key || syncing || (!manual && Date.now() - lastSyncAt < 20000)) return;
+  syncing = true; lastSyncAt = Date.now();
+  if (manual) setMsg('attacks-msg', 'Leggo i tuoi attacchi…');
+  try {
+    // The server makes at least 2 Torn calls with our key (battle stats + attacks): count them here.
+    await tornLimiter.take(); await tornLimiter.take();
+    let d = null;
+    try {
+      const r = await timedFetch('/api/sync', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ key: state.key }) });
+      d = await r.json();
+    } catch { /* server unreachable */ }
+    if (!d) throw new Error('Database non raggiungibile.');
+    if (d.throttled) { if (manual) setMsg('attacks-msg', 'Aggiornati da poco, riprova tra qualche secondo.'); return; }
+    if (d.error) {
+      if (d.error.code === 5) tornLimiter.pause(30000);
+      throw new Error(d.error.code === 16 ? 'La key non può leggere i tuoi attacchi (serve una key Limited).' : `Torn: ${d.error.error} (codice ${d.error.code})`);
+    }
+    if (d.calls > 2) tornLimiter.record(d.calls - 2);
+    state.myAttacks = new Map();
+    for (const a of d.attacks) if (!state.myAttacks.has(String(a.defender_id))) state.myAttacks.set(String(a.defender_id), a);
+    state.attacksTotal = d.total;
+    // Torn can take a moment to log the fight: if it isn't there yet, try a couple more times.
+    if (d.added) { state.pendingAttack = false; pendingTries = 0; }
+    else if (state.pendingAttack && pendingTries++ < 2) setTimeout(() => syncAttacks(), 25000);
+    // New fair fights change the BSS of targets already in the table.
+    if (d.added && state.targets.size) { await enrichFromDb([...state.targets.values()]); state.targets.forEach(score); }
+    renderAttacks();
+    scheduleRender();
+    setMsg('attacks-msg', `${d.total} attacchi salvati${d.added ? `, ${d.added} nuovi` : ''}.${d.hasStats ? '' : ' La key non legge le tue battle stats: salvo la FF ma non ricavo il BSS dei target.'}`, d.added ? 'ok' : '');
+  } catch (e) {
+    setMsg('attacks-msg', e.message, 'error');
+  } finally {
+    syncing = false;
+  }
+}
+
+const ago = (ts) => { const s = nowSec() - ts; return s < 3600 ? `${Math.max(1, Math.round(s / 60))} min fa` : s < 86400 ? `${Math.round(s / 3600)} h fa` : `${Math.round(s / 86400)} gg fa`; };
+function renderAttacks() {
+  $('attacks-card').classList.remove('hidden');
+  const rows = [...state.myAttacks.values()].slice(0, 15);
+  $('attacks-list').innerHTML = rows.length ? rows.map((a) => `<li>
+    <a href="https://www.torn.com/profiles.php?XID=${esc(a.defender_id)}" target="_blank" rel="noopener">${esc(a.name || a.defender_id)}</a>
+    <span class="muted">${a.level ? `Lv ${esc(a.level)} · ` : ''}${esc(a.result)} · ${ago(a.ended)}</span>
+    <strong>FF ${a.fair_fight != null ? a.fair_fight.toFixed(2) : '?'}</strong>${a.respect ? ` <span class="muted">${a.respect.toFixed(2)} resp</span>` : ''}
+  </li>`).join('') : '<li class="muted">Nessun attacco ancora: attacca un target con il pulsante "Attacca" e torna qui.</li>';
 }
 
 // ---------- connect ----------
@@ -318,6 +399,7 @@ async function connect() {
     if (!me.bss) return setMsg('key-msg', `Connesso come ${me.name}. La key non può leggere le tue battle stats: inserisci il tuo BSS a mano oppure usa una key Limited.`, 'error');
     if (missing.includes('personalstats')) setMsg('key-msg', 'La key non può leggere le tue personal stats: la stima senza FFScouter non sarà disponibile.', 'error');
     if (!state.ffsReady && state.mode === 'ffs' && me.training) selectMode('est');
+    syncAttacks(true);
     const fallback = ' Uso la stima dalle personal stats (scheda "Stima senza FFScouter").';
     if (!missing.length) setMsg('key-msg', `Connesso come ${me.name}.${state.ffsReady ? '' : state.ffsDown ? ' FFScouter non risponde ora.' + fallback : ' Stime FFScouter non disponibili.' + fallback}`, state.ffsReady ? 'ok' : '');
   } catch (e) {
@@ -382,6 +464,7 @@ async function runPool(items, worker, concurrency = 4) {
 // extra: an optional check on the fresh profile (e.g. account age), on top of status/level/estimate.
 async function verifyAndAdd(cands, f, extra = () => true) {
   let added = 0, failed = 0, checked = 0;
+  await enrichFromDb(cands);
   await runPool(cands, async (t) => {
     try {
       const p = await fetchProfile(t.id, needsEstimate(t));
@@ -474,10 +557,15 @@ async function searchFaction(f) {
       if (statusPasses(t.status, f.hospWithin) && levelPasses(t, f)) cands.push(t);
     }
   }
+  await enrichFromDb(cands);
   if (!state.ffsReady) {
-    // No FFScouter: one Torn call per member (profile + personal stats) for the estimate.
-    setMsg('search-msg', `${cands.length} membri attaccabili, stimo le stat dalle personal stats (1 chiamata ciascuno)…`);
-    return verifyAndAdd(cands, f);
+    // No FFScouter: members the database already knows need no call; the others one call each.
+    const known = cands.filter((t) => t.bssDb);
+    let added = 0;
+    for (const t of known) { score(t); if (estimatePasses(t, f)) { upsert(t); added++; } }
+    const rest = cands.filter((t) => !t.bssDb);
+    setMsg('search-msg', `${cands.length} membri attaccabili, ${known.length} già nel database, stimo gli altri dalle personal stats (1 chiamata ciascuno)…`);
+    return added + await verifyAndAdd(rest, f);
   }
   setMsg('search-msg', `${cands.length} membri attaccabili, stimo le stat…`);
   await enrichWithStats(cands);
@@ -534,6 +622,24 @@ async function searchEst(f) {
   return added;
 }
 
+// The ready pool: players attacked through Prowler, with a BSS from a real fair fight.
+// The FF filter runs before any Torn call, so only the ones in range cost one status check each.
+async function searchDb(f) {
+  if (!dbAvailable) throw new Error('Il database è disponibile solo con server.js.');
+  const days = Math.max(1, num('db-days') || 30);
+  const d = await dbGet(`/api/pool?lvlMin=${f.lvlMin}&lvlMax=${f.lvlMax}&days=${days}&limit=500`);
+  if (!d) throw new Error('Database non raggiungibile.');
+  const mine = $('db-mine').checked;
+  const cands = d.players
+    .filter((p) => String(p.id) !== String(state.me.id) && !state.targets.has(String(p.id)) && !state.ignored.has(String(p.id)))
+    .filter((p) => !mine || state.myAttacks.has(String(p.id)))
+    .map((p) => score(applyDb({ id: String(p.id), name: p.name, level: p.level, faction: p.faction || undefined }, p)))
+    .filter((t) => levelPasses(t, f) && estimatePasses(t, f))
+    .sort((a, b) => (b.respect || 0) - (a.respect || 0));
+  setMsg('search-msg', `${d.players.length} giocatori nel database, ${cands.length} nel tuo range: controllo lo stato…`);
+  return verifyAndAdd(cands, f);
+}
+
 async function search() {
   if (state.searching) return;
   saveSettings();
@@ -541,7 +647,7 @@ async function search() {
   $('btn-search').disabled = true; $('btn-stop').disabled = false;
   const f = filters();
   try {
-    const fn = { ffs: searchFfs, faction: searchFaction, ids: searchIds, est: searchEst }[state.mode];
+    const fn = { ffs: searchFfs, faction: searchFaction, ids: searchIds, est: searchEst, db: searchDb }[state.mode];
     const added = await fn(f);
     setMsg('search-msg', state.abort ? 'Ricerca interrotta.' : `Fatto: ${added} nuovi target.`, 'ok');
   } catch (e) {
@@ -583,7 +689,7 @@ const STATUS_RANK = { Okay: 0, Hospital: 1 };
 function sortValue(t, k) {
   switch (k) {
     case 'name': return (t.name || '').toLowerCase();
-    case 'bss': return t.bssPublic || t.bssEst || 0;
+    case 'bss': return (t.fromAttack ? t.bssDb : t.bssPublic || t.bssEst) || 0;
     case 'status': return (STATUS_RANK[t.status && t.status.state] ?? 2) * 1e10 + ((t.status && t.status.until) || 0);
     case 'lastAction': return (t.lastAction && t.lastAction.timestamp) || 0;
     default: return t[k] ?? -Infinity;
@@ -609,16 +715,18 @@ function rowHtml(t) {
   const stText = st.state === 'Hospital' ? `In ospedale (${countdown(st.until)})` : esc(st.state || '?');
   const pct = t.bssPct != null ? Math.round(t.bssPct - 100) : null;
   const la = t.lastAction || {};
-  const bss = t.bssPublic || t.bssEst;
-  const est = t.estimated ? '~' : '';
+  const bss = t.fromAttack ? t.bssDb : t.bssPublic || t.bssEst;
+  // A lower bound (real FF was 3) makes our FF a lower bound too, unless it's already 3.
+  const est = t.estimated ? '~' : t.fromAttack && t.bssDbMin && t.ff < 3 ? '≥' : '';
+  const mine = state.myAttacks.get(String(t.id));
   const estTitle = t.estimated && state.me.training
     ? ` title="${esc(`Stima dalle personal stats, non affidabile al 100%.\nTarget: ${trainingText(t.training)}\nTu: ${trainingText(state.me.training)}\nEnergia stimata: ${Math.round(t.estRatio * 100)}% della tua`)}"`
     : '';
   return `<tr data-id="${esc(t.id)}">
     <td class="name"><a href="https://www.torn.com/profiles.php?XID=${esc(t.id)}" target="_blank" rel="noopener">${esc(t.name || '?')}</a> <span class="muted">[${esc(t.id)}]</span>${t.faction ? `<span class="sub">${esc(t.faction)}</span>` : ''}</td>
     <td>${esc(t.level ?? '?')}</td>
-    <td${estTitle}>${bss ? est + fmt(bss) : '?'}${t.estimated ? ' <span class="est-tag">stima</span>' : ''}<span class="sub">${pct != null ? `<span class="${pct <= 0 ? 'pos' : 'neg'}">${pct > 0 ? '+' : ''}${pct}%</span>` : ''}${t.bsHuman ? ` · ${esc(t.bsHuman)}` : ''}</span>${t.estimated ? `<span class="sub">${esc(trainingText(t.training))}</span>` : ''}</td>
-    <td>${t.ff != null ? est + t.ff.toFixed(2) : '?'}</td>
+    <td${estTitle}${t.fromAttack ? ` title="${esc(`Ricavato dalla fair fight reale di un attacco di ${ago(t.bssDbAt)}${t.bssDbMin ? ' (FF 3: è un minimo)' : ''}`)}"` : ''}>${bss ? est + fmt(bss) : '?'}${t.estimated ? ' <span class="est-tag">stima</span>' : ''}${t.fromAttack ? ' <span class="est-tag real-tag">reale</span>' : ''}<span class="sub">${pct != null ? `<span class="${pct <= 0 ? 'pos' : 'neg'}">${pct > 0 ? '+' : ''}${pct}%</span>` : ''}${t.bsHuman ? ` · ${esc(t.bsHuman)}` : ''}</span>${t.estimated ? `<span class="sub">${esc(trainingText(t.training))}</span>` : ''}</td>
+    <td>${t.ff != null ? est + t.ff.toFixed(2) : '?'}${mine && mine.fair_fight != null ? `<span class="sub" title="${esc(`Il tuo ultimo attacco: ${mine.result}, ${ago(mine.ended)}`)}">reale ${mine.fair_fight.toFixed(2)}</span>` : ''}</td>
     <td>${t.respect != null ? est + t.respect.toFixed(2) : '?'}</td>
     <td class="${cls}">${stText}${st.description && st.state !== 'Okay' ? `<span class="sub">${esc(st.description)}</span>` : ''}</td>
     <td>${esc(la.relative || '?')}<span class="sub">${esc(la.status || '')}</span></td>
@@ -665,6 +773,12 @@ function init() {
   $('btn-search').onclick = search;
   $('btn-stop').onclick = () => { state.abort = true; };
   $('btn-recheck').onclick = () => recheck();
+  $('btn-sync').onclick = () => syncAttacks(true);
+  // After "Attacca" the fight happens in a Torn tab: read the attack (and its FF) once we're back.
+  document.querySelector('#results tbody').addEventListener('click', (e) => { if (e.target.closest('a.attack')) { state.pendingAttack = true; pendingTries = 0; } });
+  const backFromAttack = () => { if (state.pendingAttack && document.visibilityState === 'visible') setTimeout(() => syncAttacks(), 3000); };
+  document.addEventListener('visibilitychange', backFromAttack);
+  window.addEventListener('focus', backFromAttack);
   $('btn-clear-ignored').onclick = () => { state.ignored.clear(); store.set('ttf_ignored', []); setMsg('search-msg', 'Lista ignorati svuotata.'); };
   $('manual-bss').onchange = () => {
     if (!state.me) return;
