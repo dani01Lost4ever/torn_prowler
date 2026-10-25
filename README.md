@@ -35,12 +35,20 @@ Formule:
 - FF = 1 + 8/3 × (BSS target / tuo BSS), tra 1 e 3.
 - Respect ≈ round((lv + 197) / 198, 2) × FF.
 
+### Attacchi e database
+Dopo un attacco partito dal pulsante **Attacca**, quando torni sulla scheda di Prowler il sito legge il tuo log attacchi (`v2/user/attacks`, solo uscenti) e salva la **fair fight reale** di ogni attacco. Lo fa anche quando ti connetti e con **Aggiorna attacchi**.
+- La lettura passa da `server.js` (`POST /api/sync`): il server usa la tua key solo per quella richiesta (2 chiamate Torn: battle stats + attacchi, contate nel limite del browser) e **non la salva**.
+- Dalla FF reale ricava il BSS vero del target: BSS target = (FF − 1) × 3/8 × tuo BSS. Con FF 3 è solo un minimo (≥). Le tue battle stats non vengono salvate.
+- Il database (SQLite integrato in Node, file `data/prowler.db`, o `DB_PATH`) tiene: i tuoi attacchi (visibili solo a te, dopo la sync con la tua key) e, per ogni giocatore attaccato, nome, livello, faction e BSS ricavato. I BSS sono condivisi tra gli utenti di Prowler.
+- In tabella il BSS da attacco (ultimi 30 giorni) ha l'etichetta **reale** e vince su FFScouter e sulla stima. Sotto la FF compare "reale X" se hai già attaccato quel giocatore.
+- Scheda **Dal database**: i giocatori già attaccati con un BSS noto. Il filtro FF gira senza chiamate e poi si controlla lo stato solo di chi è nel range. Anche "Da faction" senza FFScouter salta la chiamata per i membri già noti.
+
 **Rate limit:**
-- **Torn:** il sito non supera mai le 60 chiamate al minuto per utente. Il limite si può abbassare, non alzare. Il contatore è nel browser di ciascuno, quindi ogni utente ha il suo. Se Torn risponde con errore 5 (troppe richieste), aspetta 30 secondi e riprova.
+- **Torn:** il limite di Torn è di 100 chiamate al minuto **per account, sommando tutte le key** (docs ufficiali, "Automatic limits"), quindi una seconda key dello stesso giocatore non aiuta. Il sito non supera mai le 60 chiamate al minuto per utente. Il limite si può abbassare, non alzare. Il contatore è nel browser di ciascuno, quindi ogni utente ha il suo. Se Torn risponde con errore 5 (troppe richieste), aspetta 30 secondi e riprova.
 - **FFScouter:** il sito rispetta i limiti di ogni endpoint (get-targets 25 al minuto, get-stats 120 al minuto).
 
 ## Avvio locale
-Serve Node 18 o superiore, senza dipendenze.
+Serve Node 22.5 o superiore (per `node:sqlite`), senza dipendenze.
 
 ```
 node server.js
@@ -62,7 +70,8 @@ Attenzione se il sito è pubblico e le chiamate passano dal proxy: verso FFScout
 2. **Build Pack:** `Dockerfile`, il file è già nella root del repo.
 3. **Ports Exposes:** `3000`.
 4. **Domains:** inserisci il dominio (es. `https://prowler.tuodominio.it`). Coolify crea il certificato HTTPS.
-5. **Deploy.** Il container ha un healthcheck su `/`. Non servono variabili d'ambiente.
+5. **Persistent Storage:** aggiungi un volume montato su `/app/data`, altrimenti il database si azzera a ogni deploy.
+6. **Deploy.** Il container ha un healthcheck su `/`. Non servono variabili d'ambiente.
 
 Il server deve poter raggiungere `api.torn.com` e `ffscouter.com` in uscita.
 

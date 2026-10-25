@@ -194,6 +194,11 @@ td:nth-child(4) { font-weight: 700; }
   display: inline-block; font-size: 10px; font-weight: 700; letter-spacing: .3px; text-transform: uppercase; line-height: 1.5;
   padding: 0 5px; border: 1px solid rgba(245, 165, 36, .45); border-radius: 5px; color: var(--orange); background: var(--orange-soft); vertical-align: 1px;
 }
+.est-tag.real-tag { border-color: rgba(60, 207, 122, .45); color: var(--green); background: var(--green-soft); }
+.attacks { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 4px; }
+.attacks li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; padding: 6px 0; border-bottom: 1px solid var(--border); font-size: 13.5px; }
+.attacks li:last-child { border-bottom: 0; }
+.attacks li strong { margin-left: auto; }
 .pos { color: var(--green); }
 .neg { color: var(--red); }
 

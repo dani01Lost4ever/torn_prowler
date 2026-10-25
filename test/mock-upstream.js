@@ -35,7 +35,7 @@ function send(res, code, obj) { res.writeHead(code, { 'content-type': 'applicati
 http.createServer((req, res) => {
   const u = new URL(req.url, 'http://x');
   const q = u.searchParams;
-  if (/^\/(v2\/)?(user|faction)\//.test(u.pathname)) tornCalls++;
+  if (/^\/(v2\/)?(user|faction)(\/|$)/.test(u.pathname)) tornCalls++;
   if (!u.pathname.startsWith('/api/') && q.get('key') === CUSTOM_KEY && (q.get('selections') || 'x').split(',').some((x) => !CUSTOM_ALLOWED.has(x))) {
     return send(res, 200, { error: { code: 16, error: 'Access level of this key is not high enough' } });
   }
@@ -67,6 +67,20 @@ http.createServer((req, res) => {
       search: page.map((p) => ({ id: p.player_id, name: p.name, level: p.level, online: 'Offline', faction_id: 9533, icons: [] })),
       _metadata: { links: { next: off + 25 < ok.length ? `https://api.torn.com/v2/user/search?cursor=${off + 25}` : null, prev: null }, total: ok.length },
     });
+  }
+  // Outgoing attacks of the user: one on each of the first 6 players, the real FF from the true BSS.
+  if (u.pathname === '/v2/user/attacks') {
+    if (q.get('key') !== KEY && q.get('key') !== CUSTOM_KEY) return send(res, 200, { error: { code: 2, error: 'Incorrect key' } });
+    const myBss = Math.sqrt(1e9) * 2 + Math.sqrt(9e8) + Math.sqrt(8e8);
+    const from = Number(q.get('from') || 0);
+    const attacks = Object.values(players).slice(0, 6).map((p, i) => ({
+      id: 9000 + i, code: `c${i}`, started: now() - 3600 * (i + 1) - 60, ended: now() - 3600 * (i + 1),
+      attacker: { id: 1, name: 'dani01_cs', level: 50, faction: null },
+      defender: { id: p.player_id, name: p.name, level: p.level, faction: { id: 9533, name: p.faction.faction_name } },
+      result: i === 5 ? 'Lost' : 'Hospitalized', respect_gain: i === 5 ? 0 : 3.1, respect_loss: 0, chain: 0,
+      modifiers: { fair_fight: Math.round(Math.min(3, 1 + (8 / 3) * (p.bss / myBss)) * 100) / 100, war: 1, retaliation: 1, group: 1, overseas: 1, chain: 1, warlord: 1 },
+    })).filter((a) => a.ended > from);
+    return send(res, 200, { attacks, _metadata: { links: { next: null, prev: null } } });
   }
   m = u.pathname.match(/^\/faction\/(\d+)$/);
   if (m) {

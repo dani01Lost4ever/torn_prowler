@@ -7,6 +7,6 @@
     "start": "node server.js",
     "mock": "node test/mock-upstream.js"
   },
-  "engines": { "node": ">=18" },
+  "engines": { "node": ">=22.5" },
   "license": "MIT"
 }
