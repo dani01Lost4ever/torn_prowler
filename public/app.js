@@ -735,7 +735,9 @@ async function searchEst(f) {
   const me = state.me;
   if (!me.bss) throw new Error('Serve il tuo BSS (key Limited o inserito a mano) per confrontarti.');
   if (!me.training || !me.training.energy) throw new Error('Non riesco a leggere le tue personal stats, servono per il confronto.');
-  const range = Math.max(0, num('est-lvl-range'));
+  // "Livello ± dal tuo" is optional: empty means only Livello min/max apply.
+  const rangeTxt = $('est-lvl-range').value.trim();
+  const range = rangeTxt === '' ? Infinity : Math.max(0, Number(rangeTxt) || 0);
   const lo = Math.max(f.lvlMin, me.level - range), hi = Math.min(f.lvlMax, me.level + range);
   if (lo > hi) throw new Error(`Nessun livello tra ${lo} e ${hi}: controlla livello min/max.`);
   const flt = [`level:>=:${lo}`, `level:<=:${hi}`, 'notTraveling', 'notInJail', 'notInFederalJail'];

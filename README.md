@@ -28,7 +28,7 @@ Torn permette 100 chiamate al minuto **per account**, sommando tutte le key di q
 
 ### Stima senza FFScouter
 Se FFScouter non risponde o la key non è registrata, il sito passa da solo alla scheda **Stima senza FFScouter**:
-1. Cerca giocatori con la ricerca di Torn (`v2/user/search`, 25 per chiamata), filtrati per livello (il tuo ± N), non in volo, non in jail e, se non hai impostato "Ospedale entro", non in ospedale. Opzionali: anzianità massima (`daysOld`) e solo senza faction.
+1. Cerca giocatori con la ricerca di Torn (`v2/user/search`, 25 per chiamata), filtrati per livello (livello min/max e, se lo imposti, il tuo ± N), non in volo, non in jail e, se non hai impostato "Ospedale entro", non in ospedale. Opzionali: anzianità massima (`daysOld`) e solo senza faction.
 2. Per ogni candidato fa **una** chiamata `user/{id}?selections=profile,personalstats`, che dà sia lo stato attuale sia le personal stats e l'anzianità.
 3. Calcola un'"energia spesa in palestra" stimata, per il target e per te:
    `(xanax × 250 + energy refill × 150 + energy can × 20 + LSD × 50 + giorni di gioco × 120) × (1 + 1% × stat enhancer)`.
