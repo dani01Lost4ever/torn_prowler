@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Prowler · Torn target finder</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">Prowler <span class="muted small">target finder per Torn</span></div>
+    <div id="me" class="me hidden">
+      <span id="me-name"></span>
+      <span class="muted">Lv <span id="me-level"></span></span>
+      <span>BSS <strong id="me-bss"></strong></span>
+      <span class="muted">Total <span id="me-total"></span></span>
+    </div>
+    <div class="rate" title="Chiamate alle API Torn nell'ultimo minuto">
+      API <span id="rate-used">0</span>/<span id="rate-max">60</span> al min
+    </div>
+  </header>
+
+  <main>
+    <section class="card" id="key-card">
+      <h2>1. La tua API key</h2>
+      <p class="muted">Serve una key <strong>Limited</strong> (per leggere le tue battle stats). La key resta nel tuo browser e non viene salvata da nessuna parte.</p>
+      <div class="row">
+        <input id="api-key" type="password" placeholder="API key di Torn (16 caratteri)" autocomplete="off" spellcheck="false">
+        <label class="check"><input id="remember-key" type="checkbox"> Ricorda</label>
+        <button id="btn-connect" class="primary">Connetti</button>
+      </div>
+      <div class="row small">
+        <label>Oppure inserisci il tuo BSS a mano:
+          <input id="manual-bss" type="number" min="1" placeholder="es. 120695">
+        </label>
+      </div>
+      <div id="ffs-box" class="notice hidden">
+        <p>Per le stime delle stat dei target uso <a href="https://ffscouter.com" target="_blank" rel="noopener">FFScouter</a>. La tua key non risulta registrata lì.</p>
+        <label class="check"><input id="ffs-consent" type="checkbox"> Ho letto e accetto la <a href="https://ffscouter.com/#data-policy" target="_blank" rel="noopener">data policy di FFScouter</a></label>
+        <button id="btn-ffs-register">Registra la key su FFScouter</button>
+      </div>
+      <div id="key-msg" class="msg"></div>
+    </section>
+
+    <section class="card" id="search-card">
+      <h2>2. Cerca target</h2>
+      <div class="tabs">
+        <button class="tab active" data-mode="ffs">Ricerca FFScouter</button>
+        <button class="tab" data-mode="faction">Da faction</button>
+        <button class="tab" data-mode="ids">Lista ID</button>
+      </div>
+
+      <div class="grid">
+        <label>Fair fight min <input id="ff-min" type="number" step="0.05" min="1" max="3" value="2.5"></label>
+        <label>Fair fight max <input id="ff-max" type="number" step="0.05" min="1" max="3" value="3"></label>
+        <label>Livello min <input id="lvl-min" type="number" min="1" max="100" value="1"></label>
+        <label>Livello max <input id="lvl-max" type="number" min="1" max="100" value="100"></label>
+        <label title="BSS massimo del target rispetto al tuo. 100 = uguale al tuo">BSS max % del tuo <input id="bss-max" type="number" min="1" max="500" value="100"></label>
+        <label title="Includi chi esce dall'ospedale entro N minuti (0 = solo Okay)">Ospedale entro (min) <input id="hosp-within" type="number" min="0" max="600" value="0"></label>
+      </div>
+
+      <div class="mode-panel" data-mode="ffs">
+        <div class="grid">
+          <label>Pagine da cercare <input id="ffs-rounds" type="number" min="1" max="20" value="3"></label>
+          <label class="check"><input id="ffs-inactive" type="checkbox"> Solo inattivi (14+ giorni)</label>
+          <label class="check"><input id="ffs-factionless" type="checkbox"> Solo senza faction</label>
+        </div>
+        <p class="muted small">Ogni pagina restituisce fino a 50 candidati da FFScouter (max 20 pagine al minuto). Poi controllo lo stato di ciascuno sulle API Torn.</p>
+      </div>
+      <div class="mode-panel hidden" data-mode="faction">
+        <label>ID faction (separati da virgola o spazio)
+          <input id="faction-ids" type="text" placeholder="es. 9533, 8336">
+        </label>
+        <p class="muted small">Una chiamata Torn per faction restituisce lo stato di tutti i membri, poi stimo le stat in blocco.</p>
+      </div>
+      <div class="mode-panel hidden" data-mode="ids">
+        <label>ID giocatori (separati da virgola, spazio o a capo)
+          <textarea id="player-ids" rows="3" placeholder="2548906, 1831932 ..."></textarea>
+        </label>
+      </div>
+
+      <div class="row">
+        <button id="btn-search" class="primary" disabled>Cerca</button>
+        <button id="btn-stop" disabled>Stop</button>
+        <label class="check"><input id="auto-refresh" type="checkbox" checked> Ricontrolla lo stato ogni minuto</label>
+        <label class="small">Limite chiamate/min <input id="rate-limit" type="number" min="10" max="60" value="60"></label>
+      </div>
+      <div class="progress hidden" id="progress"><div id="progress-bar"></div></div>
+      <div id="search-msg" class="msg"></div>
+    </section>
+
+    <section class="card">
+      <div class="row between">
+        <h2>Target <span id="count" class="muted"></span></h2>
+        <div class="row">
+          <button id="btn-recheck" disabled>Ricontrolla ora</button>
+          <button id="btn-clear-ignored" class="small">Ripristina ignorati</button>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table id="results">
+          <thead>
+            <tr>
+              <th data-sort="name">Giocatore</th>
+              <th data-sort="level">Lv</th>
+              <th data-sort="bss">BSS stimato</th>
+              <th data-sort="ff">FF</th>
+              <th data-sort="respect">Respect</th>
+              <th data-sort="status">Stato</th>
+              <th data-sort="lastAction">Ultima azione</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+        <p id="empty" class="muted center">Nessun target ancora. Connetti la key e premi Cerca.</p>
+      </div>
+    </section>
+  </main>
+
+  <footer class="muted small center">
+    Stime stat da FFScouter. FF = 1 + 8/3 × (BSS target / tuo BSS), max 3. Respect ≈ (lv + 197) / 198 × FF.
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>

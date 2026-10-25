@@ -1,0 +1,96 @@
+:root {
+  --bg: #121417;
+  --card: #1b1e23;
+  --border: #2c3038;
+  --text: #e4e6ea;
+  --muted: #8b919c;
+  --accent: #3b82f6;
+  --green: #22c55e;
+  --red: #ef4444;
+  --orange: #f59e0b;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+a { color: var(--accent); }
+.hidden { display: none !important; }
+.muted { color: var(--muted); }
+.small { font-size: 12px; }
+.center { text-align: center; }
+
+.topbar {
+  display: flex; align-items: center; gap: 24px; flex-wrap: wrap;
+  padding: 10px 16px; border-bottom: 1px solid var(--border); background: var(--card);
+  position: sticky; top: 0; z-index: 5;
+}
+.brand { font-weight: 700; font-size: 16px; }
+.me { display: flex; gap: 14px; flex-wrap: wrap; }
+.rate { margin-left: auto; color: var(--muted); font-variant-numeric: tabular-nums; }
+
+main { max-width: 1200px; margin: 0 auto; padding: 16px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; }
+.card { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 14px 16px; }
+h2 { margin: 0 0 8px; font-size: 15px; }
+
+.row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 8px 0; }
+.row.between { justify-content: space-between; }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 10px; margin: 10px 0; }
+label { display: flex; flex-direction: column; gap: 4px; color: var(--muted); font-size: 12px; }
+label.check { flex-direction: row; align-items: center; color: var(--text); font-size: 13px; }
+
+input, textarea, button {
+  font: inherit; color: var(--text); background: #0f1114;
+  border: 1px solid var(--border); border-radius: 6px; padding: 7px 10px;
+}
+input[type=checkbox] { padding: 0; }
+#api-key { min-width: 0; width: 100%; flex: 1 1 220px; }
+textarea { width: 100%; resize: vertical; }
+button { cursor: pointer; background: #23272e; }
+button:hover:not(:disabled) { border-color: var(--accent); }
+button:disabled { opacity: .45; cursor: default; }
+button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+
+.tabs { display: flex; gap: 4px; margin-bottom: 4px; flex-wrap: wrap; }
+.tab.active { border-color: var(--accent); color: var(--accent); }
+
+.msg { min-height: 18px; font-size: 13px; }
+.msg.error { color: var(--red); }
+.msg.ok { color: var(--green); }
+.notice { border: 1px solid var(--orange); border-radius: 6px; padding: 8px 12px; margin: 8px 0; }
+.notice p { margin: 0 0 6px; }
+
+.progress { height: 4px; background: var(--border); border-radius: 2px; overflow: hidden; }
+#progress-bar { height: 100%; width: 0; background: var(--accent); transition: width .2s; }
+
+.table-wrap { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+th, td { padding: 8px 10px; border-bottom: 1px solid var(--border); text-align: center; white-space: nowrap; }
+th { color: var(--muted); font-weight: 600; cursor: pointer; user-select: none; }
+th.sorted::after { content: " ↓"; }
+th.sorted.asc::after { content: " ↑"; }
+td.name { text-align: left; }
+td .sub { display: block; font-size: 12px; color: var(--muted); }
+.pos { color: var(--green); }
+.neg { color: var(--red); }
+.st-okay { color: var(--green); }
+.st-hospital { color: var(--red); }
+.st-other { color: var(--orange); }
+tr.stale td { opacity: .5; }
+.actions { display: flex; gap: 6px; justify-content: flex-end; }
+.actions a, .actions button {
+  padding: 4px 9px; border-radius: 6px; border: 1px solid var(--border);
+  text-decoration: none; color: var(--text); background: #23272e; font-size: 12px;
+}
+.actions a.attack { background: var(--red); border-color: var(--red); color: #fff; font-weight: 600; }
+
+@media (max-width: 600px) {
+  main { padding: 10px; gap: 10px; }
+  .card { padding: 12px; }
+  .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .grid label.check { grid-column: 1 / -1; }
+  .topbar { gap: 10px; }
+  .rate { margin-left: 0; }
+}
