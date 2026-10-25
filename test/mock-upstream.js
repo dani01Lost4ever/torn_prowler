@@ -20,6 +20,8 @@ for (let i = 0; i < 120; i++) {
     last_action: { status: 'Offline', relative: `${i} minutes ago`, timestamp: now() - i * 60 },
     faction: { faction_id: 9533, faction_name: 'Mock Faction' },
     bss: 60000 + i * 500,
+    age: 200 + i * 15,
+    personalstats: { xantaken: i * 8, refills: i * 3, energydrinkused: i * 20, statenhancersused: i % 5, lsdtaken: i, elo: 1000 + i * 10 },
   };
 }
 let tornCalls = 0;
@@ -29,17 +31,33 @@ function send(res, code, obj) { res.writeHead(code, { 'content-type': 'applicati
 http.createServer((req, res) => {
   const u = new URL(req.url, 'http://x');
   const q = u.searchParams;
-  if (u.pathname.startsWith('/user/') || u.pathname.startsWith('/faction/')) tornCalls++;
+  if (/^\/(v2\/)?(user|faction)\//.test(u.pathname)) tornCalls++;
   if (u.pathname === '/user/' ) {
     if (q.get('key') !== KEY) return send(res, 200, { error: { code: 2, error: 'Incorrect key' } });
-    return send(res, 200, { player_id: 1, name: 'dani01_cs', level: 50, strength: 1e9, defense: 1e9, speed: 9e8, dexterity: 8e8 });
+    return send(res, 200, {
+      player_id: 1, name: 'dani01_cs', level: 50, age: 900, strength: 1e9, defense: 1e9, speed: 9e8, dexterity: 8e8,
+      personalstats: { xantaken: 500, refills: 200, energydrinkused: 1000, statenhancersused: 2, lsdtaken: 30, elo: 1500 },
+    });
   }
   let m = u.pathname.match(/^\/user\/(\d+)$/);
   if (m) {
     const p = players[m[1]];
     if (!p) return send(res, 200, { error: { code: 6, error: 'Incorrect ID' } });
-    const { bss, ...pub } = p;
-    return send(res, 200, pub);
+    const { bss, personalstats, ...pub } = p;
+    return send(res, 200, (q.get('selections') || '').includes('personalstats') ? { ...pub, personalstats } : pub);
+  }
+  if (u.pathname === '/v2/user/search') {
+    if (q.get('key') !== KEY) return send(res, 200, { error: { code: 2, error: 'Incorrect key' } });
+    const f = (q.get('filters') || '').split(',');
+    const lvl = (op) => { const x = f.find((s) => s.startsWith(`level:${op}:`)); return x ? Number(x.split(':')[2]) : null; };
+    const lo = lvl('>=') ?? 1, hi = lvl('<=') ?? 100;
+    const ok = Object.values(players).filter((p) => p.level >= lo && p.level <= hi && (!f.includes('notInHospital') || p.status.state !== 'Hospital'));
+    const off = Number(q.get('cursor') || 0);
+    const page = ok.slice(off, off + 25);
+    return send(res, 200, {
+      search: page.map((p) => ({ id: p.player_id, name: p.name, level: p.level, online: 'Offline', faction_id: 9533, icons: [] })),
+      _metadata: { links: { next: off + 25 < ok.length ? `https://api.torn.com/v2/user/search?cursor=${off + 25}` : null, prev: null }, total: ok.length },
+    });
   }
   m = u.pathname.match(/^\/faction\/(\d+)$/);
   if (m) {
@@ -47,7 +65,7 @@ http.createServer((req, res) => {
     Object.values(players).slice(0, 40).forEach((p) => { members[p.player_id] = { name: p.name, level: p.level, status: p.status, last_action: p.last_action }; });
     return send(res, 200, { ID: Number(m[1]), name: 'Mock Faction', members });
   }
-  if (u.pathname === '/api/v1/check-key') return send(res, 200, { is_registered: true });
+  if (u.pathname === '/api/v1/check-key') return process.env.FFS_DOWN ? send(res, 429, {}) : send(res, 200, { is_registered: true });
   if (u.pathname === '/api/v1/get-targets') {
     const targets = Object.values(players).slice(0, 50).map((p) => ({
       player_id: p.player_id, name: p.name, level: p.level, bss_public: p.bss, fair_fight: 2.8,

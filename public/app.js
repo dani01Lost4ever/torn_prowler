@@ -20,10 +20,33 @@ const fairFight = (targetBss, myBss) => Math.min(3, Math.max(1, 1 + (8 / 3) * (t
 // Base respect per level (Torn wiki, Chain page) times FF.
 const baseRespect = (level) => Math.round(((level + 197) / 198) * 100) / 100;
 
+// ---------- estimate from Torn personal stats (fallback when FFScouter is unavailable) ----------
+// Rough "energy put into the gym": xanax 250E, energy refill 150E, energy can ~20E (cans give 5-30E),
+// LSD 50E, plus a quarter of the natural regen (480E/day) for every day played. Each stat enhancer
+// adds 1%. The weights are guesses: tune them here. Gym, perks, education and bought stats are invisible.
+const EST_WEIGHTS = { xanax: 250, refills: 150, cans: 20, lsd: 50, perDay: 120, sePct: 1 };
+function trainingOf(ps, ageDays) {
+  if (!ps || typeof ps !== 'object') return null;
+  const n = (k) => Number(ps[k]) || 0;
+  const W = EST_WEIGHTS;
+  const t = { xanax: n('xantaken'), refills: n('refills'), cans: n('energydrinkused'), se: n('statenhancersused'), lsd: n('lsdtaken'), age: Number(ageDays) || 0, elo: ps.elo ?? null };
+  t.energy = (t.xanax * W.xanax + t.refills * W.refills + t.cans * W.cans + t.lsd * W.lsd + t.age * W.perDay) * (1 + (t.se * W.sePct) / 100);
+  return t;
+}
+const trainingText = (t) => `Xanax ${fmt(t.xanax)} · Refill ${fmt(t.refills)} · Cans ${fmt(t.cans)} · SE ${fmt(t.se)} · ${fmt(t.age)} gg`;
+// Same gym efficiency as ours is assumed: stats scale with energy, and BSS with the square root of stats.
+function estimateFromTraining(t) {
+  const mine = state.me && state.me.training;
+  t.bssEst = null; t.estRatio = null;
+  if (!t.training || !mine || !mine.energy || !state.me.bss) return;
+  t.estRatio = t.training.energy / mine.energy;
+  t.bssEst = state.me.bss * Math.sqrt(t.estRatio);
+}
+
 // ---------- state ----------
 const state = {
   key: '',
-  me: null, // { name, level, bss, total }
+  me: null, // { name, level, bss, total, age, training }
   ffsReady: false,
   mode: 'ffs',
   searching: false,
@@ -110,7 +133,7 @@ async function torn(path, params = {}) {
 // per-key limit with code 21 + retry_after_seconds. Back off briefly and grow the wait, rather than
 // sleeping a flat 30s. Progress is shown in msgId so the connect step doesn't write in the search box.
 const FFS_MAX_ATTEMPTS = 8;
-async function ffs(path, params, limiter, method = 'GET', msgId = 'search-msg') {
+async function ffs(path, params, limiter, method = 'GET', msgId = 'search-msg', maxAttempts = FFS_MAX_ATTEMPTS) {
   for (let attempt = 0; ; attempt++) {
     await limiter.take();
     let r;
@@ -124,9 +147,9 @@ async function ffs(path, params, limiter, method = 'GET', msgId = 'search-msg') 
     const code = d ? (d.code ?? (d.error && d.error.code)) : null;
     const msg = d ? (typeof d.error === 'string' ? d.error : (d.error && d.error.error) || d.message || `HTTP ${r.status}`) : r.status ? `HTTP ${r.status}` : 'non raggiungibile';
     const limited = r.status === 0 || r.status === 429 || code === 21 || code === 429;
-    if (limited && attempt < FFS_MAX_ATTEMPTS - 1) {
+    if (limited && attempt < maxAttempts - 1) {
       const wait = Number(d && d.retry_after_seconds) || Math.min(20, Math.max(r.retryAfter || 1, 2 ** attempt));
-      setMsg(msgId, `FFScouter occupato, riprovo tra ${wait}s (tentativo ${attempt + 2}/${FFS_MAX_ATTEMPTS})…`);
+      setMsg(msgId, `FFScouter occupato, riprovo tra ${wait}s (tentativo ${attempt + 2}/${maxAttempts})…`);
       await sleep(wait * 1000);
       continue;
     }
@@ -151,7 +174,7 @@ function progress(done, total) {
   $('progress-bar').style.width = total ? `${Math.round((done / total) * 100)}%` : '0';
 }
 
-const SETTINGS = ['ff-min', 'ff-max', 'lvl-min', 'lvl-max', 'bss-max', 'hosp-within', 'ffs-rounds', 'ffs-inactive', 'ffs-factionless', 'faction-ids', 'auto-refresh', 'rate-limit', 'manual-bss'];
+const SETTINGS = ['ff-min', 'ff-max', 'lvl-min', 'lvl-max', 'bss-max', 'hosp-within', 'ffs-rounds', 'ffs-inactive', 'ffs-factionless', 'faction-ids', 'auto-refresh', 'rate-limit', 'manual-bss', 'est-lvl-range', 'est-pages', 'est-days-max', 'est-factionless'];
 function saveSettings() {
   const s = {};
   for (const id of SETTINGS) { const el = $(id); s[id] = el.type === 'checkbox' ? el.checked : el.value; }
@@ -178,9 +201,13 @@ function statusPasses(st, hospWithin) {
 // Fill FF / respect / bss% on a target from whatever estimate we have.
 function score(t) {
   const myBss = state.me && state.me.bss;
-  if (t.bssPublic && myBss) {
-    t.ff = fairFight(t.bssPublic, myBss);
-    t.bssPct = (t.bssPublic / myBss) * 100;
+  // FFScouter wins when we have it; otherwise fall back to the personal stats estimate.
+  if (!t.bssPublic) estimateFromTraining(t);
+  t.estimated = !t.bssPublic && !!t.bssEst;
+  const bss = t.bssPublic || t.bssEst;
+  if (bss && myBss) {
+    t.ff = fairFight(bss, myBss);
+    t.bssPct = (bss / myBss) * 100;
   } else {
     t.ff = t.ffsFF ?? null;
     t.bssPct = null;
@@ -203,13 +230,17 @@ function applyProfile(t, p) {
   t.status = p.status;
   t.lastAction = p.last_action;
   if (p.faction && p.faction.faction_name && p.faction.faction_name !== 'None') t.faction = p.faction.faction_name;
+  if (p.age != null) t.age = p.age;
+  if (p.personalstats) t.training = trainingOf(p.personalstats, t.age);
   t.checkedAt = Date.now();
   return t;
 }
 
-async function fetchProfile(id) {
-  return torn(`/user/${id}`, { selections: 'profile' });
+// personalstats rides along in the same call, so the estimate costs no extra Torn calls.
+async function fetchProfile(id, withStats = false) {
+  return torn(`/user/${id}`, { selections: withStats ? 'profile,personalstats' : 'profile' });
 }
+const needsEstimate = (t) => !t.bssPublic && t.ffsFF == null;
 
 function upsert(t) {
   if (state.ignored.has(String(t.id))) return;
@@ -228,14 +259,14 @@ async function connect() {
   try {
     let me;
     try {
-      const d = await torn('/user/', { selections: 'basic,battlestats' });
+      const d = await torn('/user/', { selections: 'basic,profile,personalstats,battlestats' });
       const v = (x) => (x && typeof x === 'object' ? x.value : x) || 0;
       const stats = { strength: v(d.strength), defense: v(d.defense), speed: v(d.speed), dexterity: v(d.dexterity) };
-      me = { name: d.name, level: d.level, id: d.player_id, bss: bssOf(stats), total: stats.strength + stats.defense + stats.speed + stats.dexterity };
+      me = { name: d.name, level: d.level, id: d.player_id, bss: bssOf(stats), total: stats.strength + stats.defense + stats.speed + stats.dexterity, age: d.age, training: trainingOf(d.personalstats, d.age) };
     } catch (e) {
       if (e.code !== 16) throw e;
-      const d = await torn('/user/', { selections: 'basic' });
-      me = { name: d.name, level: d.level, id: d.player_id, bss: null, total: null };
+      const d = await torn('/user/', { selections: 'basic,profile,personalstats' });
+      me = { name: d.name, level: d.level, id: d.player_id, bss: null, total: null, age: d.age, training: trainingOf(d.personalstats, d.age) };
       setMsg('key-msg', 'La key non ha accesso alle battle stats (serve Limited). Inserisci il tuo BSS a mano.', 'error');
     }
     const manual = num('manual-bss');
@@ -245,7 +276,9 @@ async function connect() {
     await checkFfs();
     $('btn-search').disabled = false;
     $('btn-recheck').disabled = false;
-    if (me.bss) setMsg('key-msg', `Connesso come ${me.name}.${state.ffsReady ? '' : state.ffsDown ? ' FFScouter non risponde ora: riconnetti tra poco per le stime.' : ' Stime FFScouter non disponibili.'}`, state.ffsReady ? 'ok' : '');
+    if (!state.ffsReady && state.mode === 'ffs') selectMode('est');
+    const fallback = ' Uso la stima dalle personal stats (scheda "Stima senza FFScouter").';
+    if (me.bss) setMsg('key-msg', `Connesso come ${me.name}.${state.ffsReady ? '' : state.ffsDown ? ' FFScouter non risponde ora.' + fallback : ' Stime FFScouter non disponibili.' + fallback}`, state.ffsReady ? 'ok' : '');
   } catch (e) {
     setMsg('key-msg', e.message, 'error');
   } finally {
@@ -260,11 +293,13 @@ function renderMe() {
   $('me-level').textContent = me.level;
   $('me-bss').textContent = fmt(me.bss);
   $('me-total').textContent = fmt(me.total);
+  $('est-me').textContent = me.training ? `I tuoi valori: ${trainingText(me.training)}.` : 'Non riesco a leggere le tue personal stats: la stima non è disponibile.';
 }
 
 async function checkFfs() {
   try {
-    const d = await ffs('/api/v1/check-key', { key: state.key }, ffsLimiters.misc, 'GET', 'key-msg');
+    // Few retries here: when FFScouter is down the personal stats estimate is ready to take over.
+    const d = await ffs('/api/v1/check-key', { key: state.key }, ffsLimiters.misc, 'GET', 'key-msg', 3);
     state.ffsReady = !!d.is_registered;
     state.ffsDown = false;
     $('ffs-box').classList.toggle('hidden', state.ffsReady);
@@ -306,7 +341,7 @@ async function runPool(items, worker, concurrency = 4) {
 async function verifyAndAdd(cands, f) {
   let added = 0;
   await runPool(cands, async (t) => {
-    const p = await fetchProfile(t.id);
+    const p = await fetchProfile(t.id, needsEstimate(t));
     applyProfile(t, p);
     score(t);
     if (statusPasses(t.status, f.hospWithin) && levelPasses(t, f) && estimatePasses(t, f)) { upsert(t); added++; }
@@ -390,6 +425,11 @@ async function searchFaction(f) {
       if (statusPasses(t.status, f.hospWithin) && levelPasses(t, f)) cands.push(t);
     }
   }
+  if (!state.ffsReady) {
+    // No FFScouter: one Torn call per member (profile + personal stats) for the estimate.
+    setMsg('search-msg', `${cands.length} membri attaccabili, stimo le stat dalle personal stats (1 chiamata ciascuno)…`);
+    return verifyAndAdd(cands, f);
+  }
   setMsg('search-msg', `${cands.length} membri attaccabili, stimo le stat…`);
   await enrichWithStats(cands);
   let added = 0;
@@ -407,6 +447,43 @@ async function searchIds(f) {
   return verifyAndAdd(pre, f);
 }
 
+// Without FFScouter: Torn's own player search (v2 user/search, 25 per call) by level around ours,
+// then one profile+personalstats call per candidate, which also checks the live status.
+async function searchEst(f) {
+  const me = state.me;
+  if (!me.bss) throw new Error('Serve il tuo BSS (key Limited o inserito a mano) per confrontarti.');
+  if (!me.training || !me.training.energy) throw new Error('Non riesco a leggere le tue personal stats, servono per il confronto.');
+  const range = Math.max(0, num('est-lvl-range'));
+  const lo = Math.max(f.lvlMin, me.level - range), hi = Math.min(f.lvlMax, me.level + range);
+  if (lo > hi) throw new Error(`Nessun livello tra ${lo} e ${hi}: controlla livello min/max.`);
+  const flt = [`level:>=:${lo}`, `level:<=:${hi}`, 'notTraveling', 'notInJail', 'notInFederalJail'];
+  if (!f.hospWithin) flt.push('notInHospital');
+  const maxDays = num('est-days-max');
+  if (maxDays > 0) flt.push(`daysOld:<=:${Math.round(maxDays)}`);
+  if ($('est-factionless').checked) flt.push('notInFaction');
+  const pages = Math.min(20, Math.max(1, num('est-pages') || 1));
+  const params = { filters: flt.join(',') };
+  const seen = new Set();
+  let added = 0;
+  for (let r = 0; r < pages && !state.abort; r++) {
+    setMsg('search-msg', `Torn: cerco giocatori di livello ${lo}-${hi}, pagina ${r + 1}/${pages}…`);
+    const d = await torn('/v2/user/search', params);
+    const cands = [];
+    for (const x of d.search || []) {
+      const id = String(x.id);
+      if (id === String(me.id) || seen.has(id) || state.targets.has(id) || state.ignored.has(id)) continue;
+      seen.add(id);
+      cands.push({ id, name: x.name, level: x.level });
+    }
+    added += await verifyAndAdd(cands, f);
+    const next = d._metadata && d._metadata.links && d._metadata.links.next;
+    if (!next || !(d.search || []).length) break;
+    const cursor = new URL(next, HOSTS.torn).searchParams.get('cursor');
+    if (cursor) params.cursor = cursor; else params.offset = (r + 1) * 25;
+  }
+  return added;
+}
+
 async function search() {
   if (state.searching) return;
   saveSettings();
@@ -414,7 +491,7 @@ async function search() {
   $('btn-search').disabled = true; $('btn-stop').disabled = false;
   const f = filters();
   try {
-    const fn = { ffs: searchFfs, faction: searchFaction, ids: searchIds }[state.mode];
+    const fn = { ffs: searchFfs, faction: searchFaction, ids: searchIds, est: searchEst }[state.mode];
     const added = await fn(f);
     setMsg('search-msg', state.abort ? 'Ricerca interrotta.' : `Fatto: ${added} nuovi target.`, 'ok');
   } catch (e) {
@@ -456,7 +533,7 @@ const STATUS_RANK = { Okay: 0, Hospital: 1 };
 function sortValue(t, k) {
   switch (k) {
     case 'name': return (t.name || '').toLowerCase();
-    case 'bss': return t.bssPublic || 0;
+    case 'bss': return t.bssPublic || t.bssEst || 0;
     case 'status': return (STATUS_RANK[t.status && t.status.state] ?? 2) * 1e10 + ((t.status && t.status.until) || 0);
     case 'lastAction': return (t.lastAction && t.lastAction.timestamp) || 0;
     default: return t[k] ?? -Infinity;
@@ -482,12 +559,17 @@ function rowHtml(t) {
   const stText = st.state === 'Hospital' ? `In ospedale (${countdown(st.until)})` : esc(st.state || '?');
   const pct = t.bssPct != null ? Math.round(t.bssPct - 100) : null;
   const la = t.lastAction || {};
+  const bss = t.bssPublic || t.bssEst;
+  const est = t.estimated ? '~' : '';
+  const estTitle = t.estimated && state.me.training
+    ? ` title="${esc(`Stima dalle personal stats, non affidabile al 100%.\nTarget: ${trainingText(t.training)}\nTu: ${trainingText(state.me.training)}\nEnergia stimata: ${Math.round(t.estRatio * 100)}% della tua`)}"`
+    : '';
   return `<tr data-id="${esc(t.id)}">
     <td class="name"><a href="https://www.torn.com/profiles.php?XID=${esc(t.id)}" target="_blank" rel="noopener">${esc(t.name || '?')}</a> <span class="muted">[${esc(t.id)}]</span>${t.faction ? `<span class="sub">${esc(t.faction)}</span>` : ''}</td>
     <td>${esc(t.level ?? '?')}</td>
-    <td>${t.bssPublic ? fmt(t.bssPublic) : '?'}<span class="sub">${pct != null ? `<span class="${pct <= 0 ? 'pos' : 'neg'}">${pct > 0 ? '+' : ''}${pct}%</span>` : ''}${t.bsHuman ? ` · ${esc(t.bsHuman)}` : ''}</span></td>
-    <td>${t.ff != null ? t.ff.toFixed(2) : '?'}</td>
-    <td>${t.respect != null ? t.respect.toFixed(2) : '?'}</td>
+    <td${estTitle}>${bss ? est + fmt(bss) : '?'}${t.estimated ? ' <span class="est-tag">stima</span>' : ''}<span class="sub">${pct != null ? `<span class="${pct <= 0 ? 'pos' : 'neg'}">${pct > 0 ? '+' : ''}${pct}%</span>` : ''}${t.bsHuman ? ` · ${esc(t.bsHuman)}` : ''}</span>${t.estimated ? `<span class="sub">${esc(trainingText(t.training))}</span>` : ''}</td>
+    <td>${t.ff != null ? est + t.ff.toFixed(2) : '?'}</td>
+    <td>${t.respect != null ? est + t.respect.toFixed(2) : '?'}</td>
     <td class="${cls}">${stText}${st.description && st.state !== 'Okay' ? `<span class="sub">${esc(st.description)}</span>` : ''}</td>
     <td>${esc(la.relative || '?')}<span class="sub">${esc(la.status || '')}</span></td>
     <td><div class="actions">
@@ -516,6 +598,12 @@ function render() {
 }
 
 // ---------- wiring ----------
+function selectMode(mode) {
+  state.mode = mode;
+  document.querySelectorAll('.tab').forEach((x) => x.classList.toggle('active', x.dataset.mode === mode));
+  document.querySelectorAll('.mode-panel').forEach((p) => p.classList.toggle('hidden', p.dataset.mode !== mode));
+}
+
 function init() {
   loadSettings();
   const saved = store.get('ttf_key', '');
@@ -544,13 +632,7 @@ function init() {
   };
   $('rate-limit').onchange();
 
-  document.querySelectorAll('.tab').forEach((b) => {
-    b.onclick = () => {
-      state.mode = b.dataset.mode;
-      document.querySelectorAll('.tab').forEach((x) => x.classList.toggle('active', x === b));
-      document.querySelectorAll('.mode-panel').forEach((p) => p.classList.toggle('hidden', p.dataset.mode !== state.mode));
-    };
-  });
+  document.querySelectorAll('.tab').forEach((b) => { b.onclick = () => selectMode(b.dataset.mode); });
 
   document.querySelectorAll('#results th[data-sort]').forEach((th) => {
     th.onclick = () => {
