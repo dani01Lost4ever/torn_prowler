@@ -67,11 +67,15 @@ const useProxy = { torn: forceProxy, ffs: forceProxy };
 const directFails = { torn: 0, ffs: 0 };
 const STICKY_PROXY_AFTER = { torn: 3, ffs: Infinity };
 
+// A request that never answers would hold a search worker forever: give up after 20s.
+const FETCH_TIMEOUT_MS = 20000;
+const timedFetch = (url, init) => fetch(url, { ...init, signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
+
 async function httpJson(target, path, init, attempt = 0) {
   let res;
   if (!useProxy[target]) {
     try {
-      res = await fetch(HOSTS[target] + path, init);
+      res = await timedFetch(HOSTS[target] + path, init);
       directFails[target] = 0;
     } catch (e) {
       if (!canProxy) {
@@ -83,18 +87,23 @@ async function httpJson(target, path, init, attempt = 0) {
       else if (attempt < 2) return { status: 0, data: null, retryAfter: null };
     }
   }
-  if (!res) res = await fetch('/proxy/' + target + path, init);
+  if (!res) {
+    try { res = await timedFetch('/proxy/' + target + path, init); } catch { return { status: 0, data: null, retryAfter: null }; }
+  }
   let data = null;
   try { data = await res.json(); } catch { /* non-JSON body */ }
   return { status: res.status, data, retryAfter: Number(res.headers.get('retry-after')) || null };
 }
 
 class Limiter {
-  constructor(max) { this.max = max; this.stamps = []; this.chain = Promise.resolve(); }
+  constructor(max) { this.max = max; this.stamps = []; this.chain = Promise.resolve(); this.pausedUntil = 0; }
   used() { const t = Date.now(); this.stamps = this.stamps.filter((s) => t - s < 60000); return this.stamps.length; }
+  // Stop every caller, not just the one that got the error, so they don't all hit the limit again.
+  pause(ms) { this.pausedUntil = Math.max(this.pausedUntil, Date.now() + ms); }
   take() {
     const p = this.chain.then(async () => {
       for (;;) {
+        if (Date.now() < this.pausedUntil) { await sleep(this.pausedUntil - Date.now()); continue; }
         if (this.used() < this.max) { this.stamps.push(Date.now()); return; }
         await sleep(60000 - (Date.now() - this.stamps[0]) + 50);
       }
@@ -121,7 +130,12 @@ async function torn(path, params = {}) {
     if (!err && status < 400 && data) return data;
     const code = err ? err.code : null;
     const msg = err ? err.error : `HTTP ${status}`;
-    if (code === 5 && attempt < 3) { setMsg('search-msg', 'Torn: troppe richieste, attendo 30s…'); await sleep(30000); continue; }
+    // Code 5: over Torn's 100 calls/min, which counts every tool using your key (scripts, other sites, Torn pages).
+    if (code === 5 && attempt < 5) {
+      tornLimiter.pause(30000);
+      setMsg('search-msg', 'Torn: troppe richieste sulla tua key (contano anche script e altri siti), pausa di 30s…');
+      continue;
+    }
     if (code === 17 && attempt < 2) { await sleep(2000); continue; }
     const e = new ApiError('Torn', code, msg);
     e.fatal = TORN_FATAL.has(code);
@@ -338,14 +352,22 @@ async function runPool(items, worker, concurrency = 4) {
 }
 
 // Verify candidates with live Torn status, then add the ones that pass.
-async function verifyAndAdd(cands, f) {
-  let added = 0;
+// extra: an optional check on the fresh profile (e.g. account age), on top of status/level/estimate.
+async function verifyAndAdd(cands, f, extra = () => true) {
+  let added = 0, failed = 0, checked = 0;
   await runPool(cands, async (t) => {
-    const p = await fetchProfile(t.id, needsEstimate(t));
-    applyProfile(t, p);
-    score(t);
-    if (statusPasses(t.status, f.hospWithin) && levelPasses(t, f) && estimatePasses(t, f)) { upsert(t); added++; }
-    setMsg('search-msg', `Controllati ${cands.indexOf(t) + 1}/${cands.length}, trovati ${added}…`);
+    try {
+      const p = await fetchProfile(t.id, needsEstimate(t));
+      applyProfile(t, p);
+      score(t);
+      if (statusPasses(t.status, f.hospWithin) && levelPasses(t, f) && estimatePasses(t, f) && extra(t)) { upsert(t); added++; }
+    } catch (e) {
+      if (!e.fatal) failed++;
+      throw e;
+    } finally {
+      const pause = Math.ceil((tornLimiter.pausedUntil - Date.now()) / 1000);
+      setMsg('search-msg', `Controllati ${++checked}/${cands.length}, trovati ${added}${failed ? `, ${failed} non letti` : ''}…${pause > 0 ? ` Torn ha detto "troppe richieste": pausa di ${pause}s.` : ''}`);
+    }
   });
   return added;
 }
@@ -475,7 +497,8 @@ async function searchEst(f) {
       seen.add(id);
       cands.push({ id, name: x.name, level: x.level });
     }
-    added += await verifyAndAdd(cands, f);
+    // Torn's search filters aren't always honoured (seen with daysOld), so check level and age on the profile too.
+    added += await verifyAndAdd(cands, f, (t) => t.level >= lo && t.level <= hi && (!(maxDays > 0) || (t.age != null && t.age <= maxDays)));
     const next = d._metadata && d._metadata.links && d._metadata.links.next;
     if (!next || !(d.search || []).length) break;
     const cursor = new URL(next, HOSTS.torn).searchParams.get('cursor');
@@ -666,7 +689,8 @@ function init() {
 
   // Rate counter + hospital countdowns, once a second.
   setInterval(() => {
-    $('rate-used').textContent = tornLimiter.used();
+    const pause = Math.ceil((tornLimiter.pausedUntil - Date.now()) / 1000);
+    $('rate-used').textContent = tornLimiter.used() + (pause > 0 ? ` (pausa ${pause}s)` : '');
     if ([...state.targets.values()].some((t) => t.status && t.status.state === 'Hospital')) scheduleRender();
   }, 1000);
   // Auto re-check the top 30 targets every minute.
