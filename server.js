@@ -38,6 +38,7 @@ async function proxy(req, res, target, rest, search) {
     res.writeHead(upstream.status, {
       'content-type': upstream.headers.get('content-type') || 'application/json',
       'cache-control': 'no-store',
+      ...(upstream.headers.get('retry-after') && { 'retry-after': upstream.headers.get('retry-after') }),
     });
     res.end(body);
   } catch (err) {
