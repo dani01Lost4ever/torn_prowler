@@ -34,25 +34,36 @@ const state = {
 };
 
 // ---------- transport (direct first, falls back to our proxy on CORS/network failure) ----------
+// FFScouter's Cloudflare 429s carry no CORS headers, so in the browser a rate limit looks exactly
+// like a CORS failure. A single failed direct call must therefore not switch a target to the proxy
+// for good: we only do that after several consecutive failures (never for FFScouter, whose CORS works).
 const HOSTS = { torn: 'https://api.torn.com', ffs: 'https://ffscouter.com' };
 const canProxy = location.protocol.startsWith('http');
 const forceProxy = new URLSearchParams(location.search).has('proxy');
 const useProxy = { torn: forceProxy, ffs: forceProxy };
+const directFails = { torn: 0, ffs: 0 };
+const STICKY_PROXY_AFTER = { torn: 3, ffs: Infinity };
 
-async function httpJson(target, path, init) {
+async function httpJson(target, path, init, attempt = 0) {
   let res;
   if (!useProxy[target]) {
     try {
       res = await fetch(HOSTS[target] + path, init);
+      directFails[target] = 0;
     } catch (e) {
-      if (!canProxy) throw new Error('Impossibile contattare ' + HOSTS[target] + ' (CORS?). Avvia il sito con server.js.');
-      useProxy[target] = true;
+      if (!canProxy) {
+        if (attempt < 2) return { status: 0, data: null, retryAfter: null };
+        throw new Error('Impossibile contattare ' + HOSTS[target] + ' (CORS?). Avvia il sito con server.js.');
+      }
+      if (++directFails[target] >= STICKY_PROXY_AFTER[target]) useProxy[target] = true;
+      // Probably a CORS-less rate limit: let the caller back off and retry direct before using the proxy.
+      else if (attempt < 2) return { status: 0, data: null, retryAfter: null };
     }
   }
   if (!res) res = await fetch('/proxy/' + target + path, init);
   let data = null;
   try { data = await res.json(); } catch { /* non-JSON body */ }
-  return { status: res.status, data };
+  return { status: res.status, data, retryAfter: Number(res.headers.get('retry-after')) || null };
 }
 
 class Limiter {
@@ -81,7 +92,8 @@ async function torn(path, params = {}) {
   const qs = new URLSearchParams({ ...params, key: state.key, comment: 'Prowler' });
   for (let attempt = 0; ; attempt++) {
     await tornLimiter.take();
-    const { status, data } = await httpJson('torn', `${path}?${qs}`);
+    const { status, data } = await httpJson('torn', `${path}?${qs}`, undefined, attempt);
+    if (status === 0 && attempt < 4) { await sleep(2000 * (attempt + 1)); continue; }
     const err = data && data.error;
     if (!err && status < 400 && data) return data;
     const code = err ? err.code : null;
@@ -94,26 +106,33 @@ async function torn(path, params = {}) {
   }
 }
 
-async function ffs(path, params, limiter, method = 'GET') {
+// FFScouter answers overload with "429, Retry-After: 1" (Cloudflare, no CORS headers) and its own
+// per-key limit with code 21 + retry_after_seconds. Back off briefly and grow the wait, rather than
+// sleeping a flat 30s. Progress is shown in msgId so the connect step doesn't write in the search box.
+const FFS_MAX_ATTEMPTS = 8;
+async function ffs(path, params, limiter, method = 'GET', msgId = 'search-msg') {
   for (let attempt = 0; ; attempt++) {
     await limiter.take();
     let r;
     if (method === 'POST') {
-      r = await httpJson('ffs', path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(params) });
+      r = await httpJson('ffs', path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(params) }, attempt);
     } else {
-      r = await httpJson('ffs', `${path}?${new URLSearchParams(params)}`);
+      r = await httpJson('ffs', `${path}?${new URLSearchParams(params)}`, undefined, attempt);
     }
     const d = r.data;
-    if (r.status < 400 && d && !d.error) return d;
+    if (r.status && r.status < 400 && d && !d.error) return d;
     const code = d ? (d.code ?? (d.error && d.error.code)) : null;
-    const msg = d ? (typeof d.error === 'string' ? d.error : (d.error && d.error.error) || d.message || `HTTP ${r.status}`) : `HTTP ${r.status}`;
-    if ((r.status === 429 || code === 21) && attempt < 3) {
-      const wait = Number(d && d.retry_after_seconds) || 30;
-      setMsg('search-msg', `FFScouter: limite raggiunto, attendo ${wait}s…`);
+    const msg = d ? (typeof d.error === 'string' ? d.error : (d.error && d.error.error) || d.message || `HTTP ${r.status}`) : r.status ? `HTTP ${r.status}` : 'non raggiungibile';
+    const limited = r.status === 0 || r.status === 429 || code === 21 || code === 429;
+    if (limited && attempt < FFS_MAX_ATTEMPTS - 1) {
+      const wait = Number(d && d.retry_after_seconds) || Math.min(20, Math.max(r.retryAfter || 1, 2 ** attempt));
+      setMsg(msgId, `FFScouter occupato, riprovo tra ${wait}s (tentativo ${attempt + 2}/${FFS_MAX_ATTEMPTS})…`);
       await sleep(wait * 1000);
       continue;
     }
-    throw new ApiError('FFScouter', code, msg);
+    const e = new ApiError('FFScouter', code, msg);
+    e.limited = limited;
+    throw e;
   }
 }
 
@@ -226,7 +245,7 @@ async function connect() {
     await checkFfs();
     $('btn-search').disabled = false;
     $('btn-recheck').disabled = false;
-    if (me.bss) setMsg('key-msg', `Connesso come ${me.name}.${state.ffsReady ? '' : ' Stime FFScouter non disponibili.'}`, state.ffsReady ? 'ok' : '');
+    if (me.bss) setMsg('key-msg', `Connesso come ${me.name}.${state.ffsReady ? '' : state.ffsDown ? ' FFScouter non risponde ora: riconnetti tra poco per le stime.' : ' Stime FFScouter non disponibili.'}`, state.ffsReady ? 'ok' : '');
   } catch (e) {
     setMsg('key-msg', e.message, 'error');
   } finally {
@@ -245,12 +264,15 @@ function renderMe() {
 
 async function checkFfs() {
   try {
-    const d = await ffs('/api/v1/check-key', { key: state.key }, ffsLimiters.misc);
+    const d = await ffs('/api/v1/check-key', { key: state.key }, ffsLimiters.misc, 'GET', 'key-msg');
     state.ffsReady = !!d.is_registered;
+    state.ffsDown = false;
     $('ffs-box').classList.toggle('hidden', state.ffsReady);
   } catch (e) {
     state.ffsReady = false;
-    $('ffs-box').classList.remove('hidden');
+    // Overloaded is not the same as "not registered": don't push the user to re-register.
+    state.ffsDown = !!e.limited;
+    $('ffs-box').classList.toggle('hidden', state.ffsDown);
     console.warn('FFScouter check-key failed', e);
   }
 }
@@ -258,7 +280,7 @@ async function checkFfs() {
 async function registerFfs() {
   if (!$('ffs-consent').checked) return setMsg('key-msg', 'Devi accettare la data policy di FFScouter.', 'error');
   try {
-    await ffs('/api/v1/register', { key: state.key, agree_to_data_policy: true, signup_source: 'Prowler' }, ffsLimiters.misc, 'POST');
+    await ffs('/api/v1/register', { key: state.key, agree_to_data_policy: true, signup_source: 'Prowler' }, ffsLimiters.misc, 'POST', 'key-msg');
     await checkFfs();
     setMsg('key-msg', state.ffsReady ? 'Key registrata su FFScouter.' : 'Registrazione inviata, ma la key non risulta ancora registrata.', state.ffsReady ? 'ok' : 'error');
   } catch (e) {
@@ -310,7 +332,8 @@ async function enrichWithStats(cands) {
 }
 
 async function searchFfs(f) {
-  if (!state.ffsReady) throw new Error('Per questa ricerca serve registrare la key su FFScouter (vedi sopra).');
+  if (!state.ffsReady && state.ffsDown) await checkFfs();
+  if (!state.ffsReady) throw new Error(state.ffsDown ? 'FFScouter non risponde in questo momento, riprova tra poco.' : 'Per questa ricerca serve registrare la key su FFScouter (vedi sopra).');
   const rounds = Math.min(20, Math.max(1, num('ffs-rounds') || 1));
   const seen = new Map();
   for (let r = 0; r < rounds && !state.abort; r++) {
