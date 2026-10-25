@@ -18,7 +18,7 @@
       <span class="muted">Total <span id="me-total"></span></span>
     </div>
     <div class="rate" title="Chiamate alle API Torn nell'ultimo minuto">
-      API <span id="rate-used">0</span>/<span id="rate-max">60</span> al min
+      API <span id="rate-used">0</span>/<span id="rate-max">100</span> al min
     </div>
   </header>
 
@@ -34,6 +34,9 @@
       <div class="row small">
         <label title="Se hai creato una custom key apposta per FFScouter, mettila qui e usa sopra una key Limited">Key FFScouter (opzionale, se diversa):
           <input id="ffs-key" type="password" placeholder="es. la custom key creata per FFScouter" autocomplete="off" spellcheck="false">
+        </label>
+        <label title="Una key Limited di un altro account (es. di un amico): Torn conta 100 chiamate al minuto per account, quindi raddoppia le chiamate disponibili. Serve solo per leggere gli altri giocatori, mai per i tuoi dati">Key secondaria (opzionale, di un altro account):
+          <input id="extra-key" type="password" placeholder="es. la key Limited di un amico" autocomplete="off" spellcheck="false">
         </label>
         <label>Oppure inserisci il tuo BSS a mano:
           <input id="manual-bss" type="number" min="1" placeholder="es. 120695">
@@ -110,7 +113,7 @@
         <button id="btn-search" class="primary" disabled>Cerca</button>
         <button id="btn-stop" disabled>Stop</button>
         <label class="check"><input id="auto-refresh" type="checkbox" checked> Ricontrolla lo stato ogni minuto</label>
-        <label class="small">Limite chiamate/min <input id="rate-limit" type="number" min="10" max="60" value="60"></label>
+        <label class="small" title="Per ogni key. Torn ne permette 100 al minuto per account, contando anche script e altri siti">Limite chiamate/min per key <input id="rate-limit-key" type="number" min="10" max="100" value="100"></label>
       </div>
       <div class="progress hidden" id="progress"><div id="progress-bar"></div></div>
       <div id="search-msg" class="msg"></div>

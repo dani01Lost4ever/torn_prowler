@@ -7,6 +7,8 @@ const http = require('http');
 const KEY = 'AAAAAAAAAAAAAAAA';
 // Like the custom key FFScouter asks for (user=basic,battlestats,hof,attacks): registered on FFScouter, no profile.
 const CUSTOM_KEY = 'BBBBBBBBBBBBBBBB';
+// A friend's Limited key (another account), for the secondary key.
+const FRIEND_KEY = 'CCCCCCCCCCCCCCCC';
 const CUSTOM_ALLOWED = new Set(['basic', 'battlestats', 'hof', 'attacks']);
 const now = () => Math.floor(Date.now() / 1000);
 const STATES = ['Okay', 'Okay', 'Okay', 'Hospital', 'Traveling', 'Abroad', 'Jail'];
@@ -29,15 +31,19 @@ for (let i = 0; i < 120; i++) {
   };
 }
 let tornCalls = 0;
+const callsByKey = {};
 
 function send(res, code, obj) { res.writeHead(code, { 'content-type': 'application/json' }); res.end(JSON.stringify(obj)); }
 
 http.createServer((req, res) => {
   const u = new URL(req.url, 'http://x');
   const q = u.searchParams;
-  if (/^\/(v2\/)?(user|faction)(\/|$)/.test(u.pathname)) tornCalls++;
+  if (/^\/(v2\/)?(user|faction)(\/|$)/.test(u.pathname)) { tornCalls++; callsByKey[q.get('key')] = (callsByKey[q.get('key')] || 0) + 1; }
   if (!u.pathname.startsWith('/api/') && q.get('key') === CUSTOM_KEY && (q.get('selections') || 'x').split(',').some((x) => !CUSTOM_ALLOWED.has(x))) {
     return send(res, 200, { error: { code: 16, error: 'Access level of this key is not high enough' } });
+  }
+  if (u.pathname === '/user/' && q.get('key') === FRIEND_KEY) {
+    return send(res, 200, { player_id: 2, name: 'amico', level: 30, age: 400, personalstats: {} });
   }
   if (u.pathname === '/user/' ) {
     if (q.get('key') !== KEY && q.get('key') !== CUSTOM_KEY) return send(res, 200, { error: { code: 2, error: 'Incorrect key' } });
@@ -56,7 +62,7 @@ http.createServer((req, res) => {
     return send(res, 200, (q.get('selections') || '').includes('personalstats') ? { ...pub, personalstats } : pub);
   }
   if (u.pathname === '/v2/user/search') {
-    if (q.get('key') !== KEY) return send(res, 200, { error: { code: 2, error: 'Incorrect key' } });
+    if (q.get('key') !== KEY && q.get('key') !== FRIEND_KEY) return send(res, 200, { error: { code: 2, error: 'Incorrect key' } });
     const f = (q.get('filters') || '').split(',');
     const lvl = (op) => { const x = f.find((s) => s.startsWith(`level:${op}:`)); return x ? Number(x.split(':')[2]) : null; };
     const lo = lvl('>=') ?? 1, hi = lvl('<=') ?? 100;
@@ -101,6 +107,6 @@ http.createServer((req, res) => {
       player_id: Number(id), bss_public: players[id] ? players[id].bss : null, fair_fight: 2.5, bs_estimate_human: '1b',
     })));
   }
-  if (u.pathname === '/calls') return send(res, 200, { tornCalls });
+  if (u.pathname === '/calls') return send(res, 200, { tornCalls, callsByKey });
   send(res, 404, { error: 'not found' });
 }).listen(4001, () => console.log('mock upstream on :4001'));

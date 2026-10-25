@@ -105,6 +105,10 @@ class Limiter {
   pause(ms) { this.pausedUntil = Math.max(this.pausedUntil, Date.now() + ms); }
   // Count calls someone else made with our key (the server, during a sync).
   record(n) { for (let i = 0; i < n; i++) this.stamps.push(Date.now()); }
+  // Synchronous: take a slot now if there is one.
+  tryTake() { if (Date.now() < this.pausedUntil || this.used() >= this.max) return false; this.stamps.push(Date.now()); return true; }
+  // How long until tryTake() can succeed.
+  waitMs() { const t = Date.now(); return Math.max(this.pausedUntil - t, this.used() < this.max ? 0 : 60000 - (t - this.stamps[0]) + 50, 0); }
   take() {
     const p = this.chain.then(async () => {
       for (;;) {
@@ -117,7 +121,22 @@ class Limiter {
     return p;
   }
 }
-const tornLimiter = new Limiter(60);
+// Torn allows 100 calls/min per account, counting all of its keys. A key from another account
+// (e.g. a friend's) has its own 100: calls about other players go to whichever key has room.
+// Calls about ourselves (our stats, our attacks) always use the main key.
+const tornKeys = { main: { key: '', label: 'principale', limiter: new Limiter(100) }, extra: null };
+const tornLimiter = tornKeys.main.limiter;
+const activeKeys = () => (tornKeys.extra ? [tornKeys.main, tornKeys.extra] : [tornKeys.main]);
+async function pickKey(only) {
+  for (;;) {
+    const list = only ? [only] : activeKeys().sort((a, b) => a.limiter.used() - b.limiter.used());
+    const k = list.find((x) => x.limiter.tryTake());
+    if (k) return k;
+    await sleep(Math.max(50, Math.min(...list.map((x) => x.limiter.waitMs()))));
+  }
+}
+// Seconds until some key can call again (0 if one can now).
+const tornPauseLeft = () => Math.max(0, Math.ceil(Math.min(...activeKeys().map((k) => k.limiter.pausedUntil - Date.now())) / 1000));
 const ffsLimiters = { targets: new Limiter(20), stats: new Limiter(100), misc: new Limiter(15) };
 
 class ApiError extends Error {
@@ -126,10 +145,11 @@ class ApiError extends Error {
 const TORN_FATAL = new Set([1, 2, 8, 9, 10, 13, 14, 16, 18]);
 const KEY_HELP = 'Usa una key Limited (link qui sopra). La custom key creata per FFScouter mettila nel campo "Key FFScouter".';
 
-async function torn(path, params = {}) {
-  const qs = new URLSearchParams({ ...params, key: state.key, comment: 'Prowler' });
+// opts.key: use only this key (tornKeys.main for calls about ourselves).
+async function torn(path, params = {}, opts = {}) {
   for (let attempt = 0; ; attempt++) {
-    await tornLimiter.take();
+    const k = await pickKey(opts.key);
+    const qs = new URLSearchParams({ ...params, key: k.key, comment: 'Prowler' });
     const { status, data } = await httpJson('torn', `${path}?${qs}`, undefined, attempt);
     if (status === 0 && attempt < 4) { await sleep(2000 * (attempt + 1)); continue; }
     const err = data && data.error;
@@ -140,8 +160,15 @@ async function torn(path, params = {}) {
       : err ? err.error : `HTTP ${status}`;
     // Code 5: over Torn's 100 calls/min, which counts every tool using your key (scripts, other sites, Torn pages).
     if (code === 5 && attempt < 5) {
-      tornLimiter.pause(30000);
-      setMsg('search-msg', 'Torn: troppe richieste sulla tua key (contano anche script e altri siti), pausa di 30s…');
+      k.limiter.pause(30000);
+      setMsg('search-msg', `Torn: troppe richieste sulla key ${k.label} (contano anche script e altri siti), pausa di 30s${tornKeys.extra && !opts.key ? ', intanto uso l\'altra' : ''}…`);
+      continue;
+    }
+    // A broken secondary key must not stop the search: drop it and carry on with the main one.
+    if (k === tornKeys.extra && !opts.key && TORN_FATAL.has(code)) {
+      tornKeys.extra = null;
+      setMsg('key-msg', `La key secondaria ha smesso di funzionare (${err ? err.error : `HTTP ${status}`}): continuo solo con la principale.`, 'error');
+      attempt--;
       continue;
     }
     if (code === 17 && attempt < 2) { await sleep(2000); continue; }
@@ -196,7 +223,7 @@ function progress(done, total) {
   $('progress-bar').style.width = total ? `${Math.round((done / total) * 100)}%` : '0';
 }
 
-const SETTINGS = ['ff-min', 'ff-max', 'lvl-min', 'lvl-max', 'bss-max', 'hosp-within', 'ffs-rounds', 'ffs-inactive', 'ffs-factionless', 'faction-ids', 'auto-refresh', 'rate-limit', 'manual-bss', 'est-lvl-range', 'est-pages', 'est-days-max', 'est-factionless', 'db-days', 'db-mine'];
+const SETTINGS = ['ff-min', 'ff-max', 'lvl-min', 'lvl-max', 'bss-max', 'hosp-within', 'ffs-rounds', 'ffs-inactive', 'ffs-factionless', 'faction-ids', 'auto-refresh', 'rate-limit-key', 'manual-bss', 'est-lvl-range', 'est-pages', 'est-days-max', 'est-factionless', 'db-days', 'db-mine'];
 function saveSettings() {
   const s = {};
   for (const id of SETTINGS) { const el = $(id); s[id] = el.type === 'checkbox' ? el.checked : el.value; }
@@ -351,16 +378,30 @@ function renderAttacks() {
 // everything in one call; on code 16 read basic alone and probe the others one by one.
 async function readMe() {
   try {
-    return { d: await torn('/user/', { selections: 'basic,profile,personalstats,battlestats' }), missing: [] };
+    return { d: await torn('/user/', { selections: 'basic,profile,personalstats,battlestats' }, { key: tornKeys.main }), missing: [] };
   } catch (e) {
     if (e.code !== 16) throw e;
   }
-  const d = await torn('/user/', { selections: 'basic' });
+  const d = await torn('/user/', { selections: 'basic' }, { key: tornKeys.main });
   const missing = [];
   for (const sel of ['profile', 'battlestats', 'personalstats']) {
-    try { Object.assign(d, await torn('/user/', { selections: sel })); } catch (e) { if (e.code !== 16) throw e; missing.push(sel); }
+    try { Object.assign(d, await torn('/user/', { selections: sel }, { key: tornKeys.main })); } catch (e) { if (e.code !== 16) throw e; missing.push(sel); }
   }
   return { d, missing };
+}
+
+// The secondary key must belong to another account (same account = same 100/min, no gain)
+// and be able to read profiles and personal stats like the main one. One call checks both.
+async function addExtraKey(extraKey, me) {
+  const k = { key: extraKey, label: 'secondaria', limiter: new Limiter(tornLimiter.max) };
+  try {
+    const d = await torn('/user/', { selections: 'basic,profile,personalstats' }, { key: k });
+    if (String(d.player_id) === String(me.id)) return ' La key secondaria è del tuo stesso account: Torn conta le chiamate per account, quindi non aggiunge nulla e non la uso.';
+    tornKeys.extra = k;
+    return ` Key secondaria di ${d.name} attiva: le chiamate si alternano tra le due key (fino a ${tornLimiter.max * 2} al minuto).`;
+  } catch (e) {
+    return ` Key secondaria non usata: ${e.code === 16 ? 'serve una key Limited.' : e.message}`;
+  }
 }
 
 async function connect() {
@@ -368,9 +409,13 @@ async function connect() {
   if (!/^[A-Za-z0-9]{16}$/.test(key)) return setMsg('key-msg', 'La key deve essere di 16 caratteri alfanumerici.', 'error');
   const ffsKey = $('ffs-key').value.trim();
   if (ffsKey && !/^[A-Za-z0-9]{16}$/.test(ffsKey)) return setMsg('key-msg', 'Anche la key FFScouter deve essere di 16 caratteri alfanumerici.', 'error');
+  const extraKey = $('extra-key').value.trim();
+  if (extraKey && (!/^[A-Za-z0-9]{16}$/.test(extraKey) || extraKey === key)) return setMsg('key-msg', 'La key secondaria deve essere di 16 caratteri alfanumerici e diversa dalla principale.', 'error');
   state.key = key;
   state.ffsKey = ffsKey || key;
-  if ($('remember-key').checked) { store.set('ttf_key', key); store.set('ttf_ffs_key', ffsKey); } else { store.del('ttf_key'); store.del('ttf_ffs_key'); }
+  tornKeys.main.key = key;
+  tornKeys.extra = null;
+  if ($('remember-key').checked) { store.set('ttf_key', key); store.set('ttf_ffs_key', ffsKey); store.set('ttf_extra_key', extraKey); } else { store.del('ttf_key'); store.del('ttf_ffs_key'); store.del('ttf_extra_key'); }
   setMsg('key-msg', 'Connessione…');
   $('btn-connect').disabled = true;
   try {
@@ -387,6 +432,7 @@ async function connect() {
     if (manual > 0) me.bss = manual;
     state.me = me;
     renderMe();
+    const extraNote = extraKey ? await addExtraKey(extraKey, me) : '';
     await checkFfs();
     // Without "profile" we can't read anyone's status, so searching would only produce errors.
     if (missing.includes('profile')) {
@@ -401,7 +447,7 @@ async function connect() {
     if (!state.ffsReady && state.mode === 'ffs' && me.training) selectMode('est');
     syncAttacks(true);
     const fallback = ' Uso la stima dalle personal stats (scheda "Stima senza FFScouter").';
-    if (!missing.length) setMsg('key-msg', `Connesso come ${me.name}.${state.ffsReady ? '' : state.ffsDown ? ' FFScouter non risponde ora.' + fallback : ' Stime FFScouter non disponibili.' + fallback}`, state.ffsReady ? 'ok' : '');
+    if (!missing.length) setMsg('key-msg', `Connesso come ${me.name}.${extraNote}${state.ffsReady ? '' : state.ffsDown ? ' FFScouter non risponde ora.' + fallback : ' Stime FFScouter non disponibili.' + fallback}`, state.ffsReady ? 'ok' : '');
   } catch (e) {
     setMsg('key-msg', e.message, 'error');
   } finally {
@@ -447,7 +493,7 @@ async function registerFfs() {
 }
 
 // ---------- search ----------
-async function runPool(items, worker, concurrency = 4) {
+async function runPool(items, worker, concurrency = 4 * activeKeys().length) {
   let i = 0, done = 0;
   progress(0, items.length);
   const next = async () => {
@@ -475,7 +521,7 @@ async function verifyAndAdd(cands, f, extra = () => true) {
       if (!e.fatal) failed++;
       throw e;
     } finally {
-      const pause = Math.ceil((tornLimiter.pausedUntil - Date.now()) / 1000);
+      const pause = tornPauseLeft();
       setMsg('search-msg', `Controllati ${++checked}/${cands.length}, trovati ${added}${failed ? `, ${failed} non letti` : ''}…${pause > 0 ? ` Torn ha detto "troppe richieste": pausa di ${pause}s.` : ''}`);
     }
   });
@@ -765,7 +811,7 @@ function selectMode(mode) {
 function init() {
   loadSettings();
   const saved = store.get('ttf_key', '');
-  if (saved) { $('api-key').value = saved; $('remember-key').checked = true; $('ffs-key').value = store.get('ttf_ffs_key', ''); }
+  if (saved) { $('api-key').value = saved; $('remember-key').checked = true; $('ffs-key').value = store.get('ttf_ffs_key', ''); $('extra-key').value = store.get('ttf_extra_key', ''); }
 
   $('btn-connect').onclick = connect;
   $('api-key').onkeydown = (e) => { if (e.key === 'Enter') connect(); };
@@ -788,13 +834,13 @@ function init() {
     state.targets.forEach(score);
     scheduleRender();
   };
-  $('rate-limit').onchange = () => {
-    tornLimiter.max = Math.min(60, Math.max(10, num('rate-limit') || 60));
-    $('rate-limit').value = tornLimiter.max;
-    $('rate-max').textContent = tornLimiter.max;
+  $('rate-limit-key').onchange = () => {
+    tornLimiter.max = Math.min(100, Math.max(10, num('rate-limit-key') || 100));
+    if (tornKeys.extra) tornKeys.extra.limiter.max = tornLimiter.max;
+    $('rate-limit-key').value = tornLimiter.max;
     saveSettings();
   };
-  $('rate-limit').onchange();
+  $('rate-limit-key').onchange();
 
   document.querySelectorAll('.tab').forEach((b) => { b.onclick = () => selectMode(b.dataset.mode); });
 
@@ -830,8 +876,10 @@ function init() {
 
   // Rate counter + hospital countdowns, once a second.
   setInterval(() => {
-    const pause = Math.ceil((tornLimiter.pausedUntil - Date.now()) / 1000);
-    $('rate-used').textContent = tornLimiter.used() + (pause > 0 ? ` (pausa ${pause}s)` : '');
+    const pause = tornPauseLeft();
+    const keys = activeKeys();
+    $('rate-used').textContent = keys.reduce((a, k) => a + k.limiter.used(), 0) + (pause > 0 ? ` (pausa ${pause}s)` : '');
+    $('rate-max').textContent = keys.reduce((a, k) => a + k.limiter.max, 0);
     if ([...state.targets.values()].some((t) => t.status && t.status.state === 'Hospital')) scheduleRender();
   }, 1000);
   // Auto re-check the top 30 targets every minute.
