@@ -5,6 +5,9 @@
 const http = require('http');
 
 const KEY = 'AAAAAAAAAAAAAAAA';
+// Like the custom key FFScouter asks for (user=basic,battlestats,hof,attacks): registered on FFScouter, no profile.
+const CUSTOM_KEY = 'BBBBBBBBBBBBBBBB';
+const CUSTOM_ALLOWED = new Set(['basic', 'battlestats', 'hof', 'attacks']);
 const now = () => Math.floor(Date.now() / 1000);
 const STATES = ['Okay', 'Okay', 'Okay', 'Hospital', 'Traveling', 'Abroad', 'Jail'];
 const players = {};
@@ -33,8 +36,11 @@ http.createServer((req, res) => {
   const u = new URL(req.url, 'http://x');
   const q = u.searchParams;
   if (/^\/(v2\/)?(user|faction)\//.test(u.pathname)) tornCalls++;
+  if (!u.pathname.startsWith('/api/') && q.get('key') === CUSTOM_KEY && (q.get('selections') || 'x').split(',').some((x) => !CUSTOM_ALLOWED.has(x))) {
+    return send(res, 200, { error: { code: 16, error: 'Access level of this key is not high enough' } });
+  }
   if (u.pathname === '/user/' ) {
-    if (q.get('key') !== KEY) return send(res, 200, { error: { code: 2, error: 'Incorrect key' } });
+    if (q.get('key') !== KEY && q.get('key') !== CUSTOM_KEY) return send(res, 200, { error: { code: 2, error: 'Incorrect key' } });
     return send(res, 200, {
       player_id: 1, name: 'dani01_cs', level: 50, age: 900, strength: 1e9, defense: 1e9, speed: 9e8, dexterity: 8e8,
       personalstats: { xantaken: 500, refills: 200, energydrinkused: 1000, statenhancersused: 2, lsdtaken: 30, elo: 1500 },
@@ -68,7 +74,7 @@ http.createServer((req, res) => {
     Object.values(players).slice(0, 40).forEach((p) => { members[p.player_id] = { name: p.name, level: p.level, status: p.status, last_action: p.last_action }; });
     return send(res, 200, { ID: Number(m[1]), name: 'Mock Faction', members });
   }
-  if (u.pathname === '/api/v1/check-key') return process.env.FFS_DOWN ? send(res, 429, {}) : send(res, 200, { is_registered: true });
+  if (u.pathname === '/api/v1/check-key') return process.env.FFS_DOWN ? send(res, 429, {}) : send(res, 200, { is_registered: q.get('key') === CUSTOM_KEY || !process.env.ONLY_CUSTOM_REGISTERED });
   if (u.pathname === '/api/v1/get-targets') {
     const targets = Object.values(players).slice(0, 50).map((p) => ({
       player_id: p.player_id, name: p.name, level: p.level, bss_public: p.bss, fair_fight: 2.8,

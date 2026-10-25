@@ -118,7 +118,8 @@ const ffsLimiters = { targets: new Limiter(20), stats: new Limiter(100), misc: n
 class ApiError extends Error {
   constructor(src, code, msg) { super(`${src}: ${msg}${code != null ? ` (codice ${code})` : ''}`); this.src = src; this.code = code; }
 }
-const TORN_FATAL = new Set([1, 2, 8, 9, 10, 13, 14, 18]);
+const TORN_FATAL = new Set([1, 2, 8, 9, 10, 13, 14, 16, 18]);
+const KEY_HELP = 'Usa una key Limited (link qui sopra). La custom key creata per FFScouter mettila nel campo "Key FFScouter".';
 
 async function torn(path, params = {}) {
   const qs = new URLSearchParams({ ...params, key: state.key, comment: 'Prowler' });
@@ -129,7 +130,9 @@ async function torn(path, params = {}) {
     const err = data && data.error;
     if (!err && status < 400 && data) return data;
     const code = err ? err.code : null;
-    const msg = err ? err.error : `HTTP ${status}`;
+    const msg = code === 16
+      ? `la key non ha il permesso "${params.selections || path}". ${KEY_HELP}`
+      : err ? err.error : `HTTP ${status}`;
     // Code 5: over Torn's 100 calls/min, which counts every tool using your key (scripts, other sites, Torn pages).
     if (code === 5 && attempt < 5) {
       tornLimiter.pause(30000);
@@ -263,36 +266,60 @@ function upsert(t) {
 }
 
 // ---------- connect ----------
+// Custom keys (like the one FFScouter asks you to create) allow only some selections. Ask for
+// everything in one call; on code 16 read basic alone and probe the others one by one.
+async function readMe() {
+  try {
+    return { d: await torn('/user/', { selections: 'basic,profile,personalstats,battlestats' }), missing: [] };
+  } catch (e) {
+    if (e.code !== 16) throw e;
+  }
+  const d = await torn('/user/', { selections: 'basic' });
+  const missing = [];
+  for (const sel of ['profile', 'battlestats', 'personalstats']) {
+    try { Object.assign(d, await torn('/user/', { selections: sel })); } catch (e) { if (e.code !== 16) throw e; missing.push(sel); }
+  }
+  return { d, missing };
+}
+
 async function connect() {
   const key = $('api-key').value.trim();
   if (!/^[A-Za-z0-9]{16}$/.test(key)) return setMsg('key-msg', 'La key deve essere di 16 caratteri alfanumerici.', 'error');
+  const ffsKey = $('ffs-key').value.trim();
+  if (ffsKey && !/^[A-Za-z0-9]{16}$/.test(ffsKey)) return setMsg('key-msg', 'Anche la key FFScouter deve essere di 16 caratteri alfanumerici.', 'error');
   state.key = key;
-  if ($('remember-key').checked) store.set('ttf_key', key); else store.del('ttf_key');
+  state.ffsKey = ffsKey || key;
+  if ($('remember-key').checked) { store.set('ttf_key', key); store.set('ttf_ffs_key', ffsKey); } else { store.del('ttf_key'); store.del('ttf_ffs_key'); }
   setMsg('key-msg', 'Connessione…');
   $('btn-connect').disabled = true;
   try {
-    let me;
-    try {
-      const d = await torn('/user/', { selections: 'basic,profile,personalstats,battlestats' });
-      const v = (x) => (x && typeof x === 'object' ? x.value : x) || 0;
-      const stats = { strength: v(d.strength), defense: v(d.defense), speed: v(d.speed), dexterity: v(d.dexterity) };
-      me = { name: d.name, level: d.level, id: d.player_id, bss: bssOf(stats), total: stats.strength + stats.defense + stats.speed + stats.dexterity, age: d.age, training: trainingOf(d.personalstats, d.age) };
-    } catch (e) {
-      if (e.code !== 16) throw e;
-      const d = await torn('/user/', { selections: 'basic,profile,personalstats' });
-      me = { name: d.name, level: d.level, id: d.player_id, bss: null, total: null, age: d.age, training: trainingOf(d.personalstats, d.age) };
-      setMsg('key-msg', 'La key non ha accesso alle battle stats (serve Limited). Inserisci il tuo BSS a mano.', 'error');
-    }
+    const { d, missing } = await readMe();
+    const v = (x) => (x && typeof x === 'object' ? x.value : x) || 0;
+    const stats = { strength: v(d.strength), defense: v(d.defense), speed: v(d.speed), dexterity: v(d.dexterity) };
+    const hasStats = !missing.includes('battlestats');
+    const me = {
+      name: d.name, level: d.level, id: d.player_id,
+      bss: hasStats ? bssOf(stats) : null, total: hasStats ? stats.strength + stats.defense + stats.speed + stats.dexterity : null,
+      age: d.age, training: trainingOf(d.personalstats, d.age),
+    };
     const manual = num('manual-bss');
     if (manual > 0) me.bss = manual;
     state.me = me;
     renderMe();
     await checkFfs();
+    // Without "profile" we can't read anyone's status, so searching would only produce errors.
+    if (missing.includes('profile')) {
+      $('btn-search').disabled = true;
+      $('btn-recheck').disabled = true;
+      return setMsg('key-msg', `Connesso come ${me.name}, ma questa key non ha il permesso "profile", che serve per controllare lo stato dei target. ${KEY_HELP}`, 'error');
+    }
     $('btn-search').disabled = false;
     $('btn-recheck').disabled = false;
-    if (!state.ffsReady && state.mode === 'ffs') selectMode('est');
+    if (!me.bss) return setMsg('key-msg', `Connesso come ${me.name}. La key non può leggere le tue battle stats: inserisci il tuo BSS a mano oppure usa una key Limited.`, 'error');
+    if (missing.includes('personalstats')) setMsg('key-msg', 'La key non può leggere le tue personal stats: la stima senza FFScouter non sarà disponibile.', 'error');
+    if (!state.ffsReady && state.mode === 'ffs' && me.training) selectMode('est');
     const fallback = ' Uso la stima dalle personal stats (scheda "Stima senza FFScouter").';
-    if (me.bss) setMsg('key-msg', `Connesso come ${me.name}.${state.ffsReady ? '' : state.ffsDown ? ' FFScouter non risponde ora.' + fallback : ' Stime FFScouter non disponibili.' + fallback}`, state.ffsReady ? 'ok' : '');
+    if (!missing.length) setMsg('key-msg', `Connesso come ${me.name}.${state.ffsReady ? '' : state.ffsDown ? ' FFScouter non risponde ora.' + fallback : ' Stime FFScouter non disponibili.' + fallback}`, state.ffsReady ? 'ok' : '');
   } catch (e) {
     setMsg('key-msg', e.message, 'error');
   } finally {
@@ -313,7 +340,7 @@ function renderMe() {
 async function checkFfs() {
   try {
     // Few retries here: when FFScouter is down the personal stats estimate is ready to take over.
-    const d = await ffs('/api/v1/check-key', { key: state.key }, ffsLimiters.misc, 'GET', 'key-msg', 3);
+    const d = await ffs('/api/v1/check-key', { key: state.ffsKey }, ffsLimiters.misc, 'GET', 'key-msg', 3);
     state.ffsReady = !!d.is_registered;
     state.ffsDown = false;
     $('ffs-box').classList.toggle('hidden', state.ffsReady);
@@ -329,7 +356,7 @@ async function checkFfs() {
 async function registerFfs() {
   if (!$('ffs-consent').checked) return setMsg('key-msg', 'Devi accettare la data policy di FFScouter.', 'error');
   try {
-    await ffs('/api/v1/register', { key: state.key, agree_to_data_policy: true, signup_source: 'Prowler' }, ffsLimiters.misc, 'POST', 'key-msg');
+    await ffs('/api/v1/register', { key: state.ffsKey, agree_to_data_policy: true, signup_source: 'Prowler' }, ffsLimiters.misc, 'POST', 'key-msg');
     await checkFfs();
     setMsg('key-msg', state.ffsReady ? 'Key registrata su FFScouter.' : 'Registrazione inviata, ma la key non risulta ancora registrata.', state.ffsReady ? 'ok' : 'error');
   } catch (e) {
@@ -376,7 +403,7 @@ async function enrichWithStats(cands) {
   if (!state.ffsReady) return;
   for (let i = 0; i < cands.length && !state.abort; i += 200) {
     const batch = cands.slice(i, i + 200);
-    const d = await ffs('/api/v1/get-stats', { key: state.key, targets: batch.map((t) => t.id).join(',') }, ffsLimiters.stats);
+    const d = await ffs('/api/v1/get-stats', { key: state.ffsKey, targets: batch.map((t) => t.id).join(',') }, ffsLimiters.stats);
     const byId = new Map((Array.isArray(d) ? d : d.data || []).map((s) => [String(s.player_id), s]));
     for (const t of batch) {
       const s = byId.get(String(t.id));
@@ -398,7 +425,7 @@ async function searchFfs(f) {
     let d;
     try {
       d = await ffs('/api/v1/get-targets', {
-        key: state.key, minlevel: f.lvlMin, maxlevel: f.lvlMax,
+        key: state.ffsKey, minlevel: f.lvlMin, maxlevel: f.lvlMax,
         minff: f.ffMin.toFixed(2), maxff: f.ffMax.toFixed(2),
         inactiveonly: $('ffs-inactive').checked ? 1 : 0,
         factionless: $('ffs-factionless').checked ? 1 : 0,
@@ -630,7 +657,7 @@ function selectMode(mode) {
 function init() {
   loadSettings();
   const saved = store.get('ttf_key', '');
-  if (saved) { $('api-key').value = saved; $('remember-key').checked = true; }
+  if (saved) { $('api-key').value = saved; $('remember-key').checked = true; $('ffs-key').value = store.get('ttf_ffs_key', ''); }
 
   $('btn-connect').onclick = connect;
   $('api-key').onkeydown = (e) => { if (e.key === 'Enter') connect(); };
